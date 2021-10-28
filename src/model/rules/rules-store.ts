@@ -1,6 +1,13 @@
 import * as _ from 'lodash';
 
-import { completionCheckers, webSocketHandlers, ProxyConfig, requestHandlers } from 'mockttp';
+import {
+  completionCheckers,
+  webSocketHandlers,
+  requestHandlers,
+  ProxyConfig,
+  ProxySetting,
+  MOCKTTP_PARAM_REF
+} from 'mockttp';
 
 import {
     observable,
@@ -256,7 +263,7 @@ export class RulesStore {
     upstreamNoProxyHosts: string[] = [];
 
     @computed
-    get effectiveSystemProxyConfig(): ProxyConfig | 'ignored' | 'unparseable' | undefined {
+    get effectiveSystemProxyConfig(): ProxySetting | 'ignored' | 'unparseable' | undefined {
         const { systemProxyConfig } = this.proxyStore;
 
         if (!systemProxyConfig) return undefined;
@@ -279,7 +286,7 @@ export class RulesStore {
     }
 
     @computed.struct
-    get proxyConfig(): ProxyConfig | undefined {
+    get userProxyConfig(): ProxySetting | undefined {
         if (this.upstreamProxyType === 'direct') {
             return undefined;
         } else if (this.upstreamProxyType === 'system') {
@@ -295,6 +302,15 @@ export class RulesStore {
         }
     }
 
+    @computed.struct
+    get proxyConfig(): ProxyConfig {
+        const { userProxyConfig } = this;
+
+        return userProxyConfig
+            ? [{ [MOCKTTP_PARAM_REF]: `docker-tunnel-proxy-${this.proxyStore.serverPort}` }, userProxyConfig]
+            : { [MOCKTTP_PARAM_REF]: `docker-tunnel-proxy-${this.proxyStore.serverPort}` };
+    }
+
     // The currently active list
     @persist('list') @observable
     whitelistedCertificateHosts: string[] = ['localhost'];
@@ -304,10 +320,10 @@ export class RulesStore {
     clientCertificateHostMap: { [host: string]: ClientCertificate } = {};
 
     @persist('object', MockRulesetSchema) @observable
-    rules: HtkMockRuleRoot = buildDefaultRules(this, this.proxyStore);
+    rules!: HtkMockRuleRoot;
 
     @observable
-    draftRules: HtkMockRuleRoot = _.cloneDeep(this.rules);
+    draftRules!: HtkMockRuleRoot;
 
     @action.bound
     saveRules() {

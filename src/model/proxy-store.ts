@@ -7,7 +7,7 @@ import {
     observe,
     runInAction,
 } from 'mobx';
-import { getRemote, Mockttp, ProxyConfig } from 'mockttp';
+import { getRemote, Mockttp, ProxySetting, ProxyConfig } from 'mockttp';
 
 import {
     PortRange,
@@ -82,7 +82,7 @@ export class ProxyStore {
     externalNetworkAddresses: string[] = [];
 
     @observable
-    systemProxyConfig: ProxyConfig | undefined;
+    systemProxyConfig: ProxySetting | undefined;
 
     @observable
     dnsServers: string[] = [];

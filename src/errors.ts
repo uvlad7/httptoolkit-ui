@@ -5,7 +5,7 @@ import { UI_VERSION, serverVersion, desktopVersion } from './services/service-ve
 let sentryInitialized = false;
 
 export function isSentryInitialized() {
-    return sentryInitialized;
+    return false;
 }
 
 export { Sentry };

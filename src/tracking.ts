@@ -2,7 +2,7 @@ import * as ReactGA from 'react-ga';
 
 import { serverVersion, desktopVersion, UI_VERSION } from './services/service-versions';
 
-const GA_ID = process.env.GA_ID;
+const GA_ID = undefined;
 const enabled = !!GA_ID && navigator.doNotTrack !== "1";
 
 // Note that all tracking here is fully anonymous.

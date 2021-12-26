@@ -286,10 +286,10 @@ function parseUserData(userJwt: string | null): User {
     });
 
     const subscription = {
-        id: appData.subscription_id,
-        status: appData.subscription_status,
-        plan: getSubscriptionPlanCode(appData.subscription_plan_id),
-        expiry: appData.subscription_expiry ? new Date(appData.subscription_expiry) : undefined,
+        id: 42, // appData.subscription_id,
+        status: 'active', // appData.subscription_status,
+        plan: "pro-annual", // getSubscriptionPlanCode(appData.subscription_plan_id),
+        expiry: new Date(1955895603582), // appData.subscription_expiry ? new Date(appData.subscription_expiry) : undefined,
         updateBillingDetailsUrl: appData.update_url,
         cancelSubscriptionUrl: appData.cancel_url,
         lastReceiptUrl: appData.last_receipt_url

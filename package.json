@@ -1,6 +1,10 @@
 {
   "name": "httptoolkit-ui",
   "version": "0.1.0",
+  "engines": {
+    "node": "12.x",
+    "npm": "7.x"
+  },
   "private": true,
   "description": "Beautiful, cross-platform & open-source HTTP(S) debugging proxy, analyzer & client.",
   "main": "dist/main.js",

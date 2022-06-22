@@ -8,7 +8,8 @@ import {
     runInAction,
     when,
     reaction,
-    comparer
+    comparer,
+    observe
 } from 'mobx';
 import { observer, disposeOnUnmount, inject } from 'mobx-react';
 import * as portals from 'react-reverse-portal';
@@ -22,7 +23,7 @@ import { UiStore } from '../../model/ui-store';
 import { ProxyStore } from '../../model/proxy-store';
 import { EventsStore } from '../../model/http/events-store';
 import { HttpExchange } from '../../model/http/exchange';
-import { emptyFilterSet, FilterSet } from '../../model/filters/search-filters';
+import { FilterSet } from '../../model/filters/search-filters';
 
 import { SplitPane } from '../split-pane';
 import { EmptyState } from '../common/empty-state';
@@ -189,6 +190,25 @@ class ViewPage extends React.Component<ViewPageProps> {
                 });
             })
         );
+
+        // Due to https://github.com/facebook/react/issues/16087 in React, which is fundamentally caused by
+        // https://bugs.chromium.org/p/chromium/issues/detail?id=1218275 in Chrome, we can leak filtered event
+        // list references, which means that HTTP exchanges persist in memory even after they're cleared.
+        // This observer ensures that the persisted array reference is always emptied after a new value appears:
+        disposeOnUnmount(this,
+            observe(this, 'filteredEventState', ({ newValue, oldValue }) => {
+                const newFilteredEvents = newValue.filteredEvents;
+                const oldFilteredEvents = oldValue?.filteredEvents;
+
+                if (
+                    oldFilteredEvents &&
+                    oldFilteredEvents !== newFilteredEvents &&
+                    oldFilteredEvents !== this.props.eventsStore.events
+                ) {
+                    oldFilteredEvents.length = 0;
+                }
+            })
+        );
     }
 
     render(): JSX.Element {
@@ -242,6 +262,7 @@ class ViewPage extends React.Component<ViewPageProps> {
                         filteredCount={filteredEventCount}
                         onFiltersConsidered={this.onSearchFiltersConsidered}
                         onClear={this.onClear}
+                        onScrollToEnd={this.onScrollToEnd}
                     />
                     <ViewEventList
                         events={events}
@@ -379,6 +400,11 @@ class ViewPage extends React.Component<ViewPageProps> {
     @action.bound
     onScrollToCenterEvent(event: CollectedEvent) {
         this.listRef.current?.scrollToCenterEvent(event);
+    }
+
+    @action.bound
+    onScrollToEnd() {
+        this.listRef.current?.scrollToEnd();
     }
 }
 

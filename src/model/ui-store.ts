@@ -130,4 +130,11 @@ export class UiStore {
             return {};
         }
     }
+
+    @persist @observable
+    preferredShell: string | undefined = 'Bash';
+
+    @persist @observable
+    exportSnippetFormat: string | undefined;
+
 }

@@ -100,6 +100,7 @@ export const ExchangeCategories = [
     'font',
     'data',
     'mutative',
+    'websocket',
     'incomplete',
     'aborted',
     'unknown'
@@ -115,6 +116,8 @@ export function getExchangeCategory(exchange: HttpExchange): ExchangeCategory {
         }
     } else if (!exchange.isSuccessfulExchange()) {
         return 'aborted';
+    } else if (exchange.isWebSocket()) {
+        return 'websocket';
     } else if (isMutatativeExchange(exchange)) {
         return 'mutative';
     } else if (isImageExchange(exchange)) {
@@ -147,6 +150,7 @@ export function describeExchangeCategory(category: ExchangeCategory) {
         "css": "a request for CSS",
         "html": "a request for HTML",
         "font": "a request for a font file",
+        "websocket": "a WebSocket stream",
         "data": "an API request",
         "unknown": "an unknown type of request"
     } as const)[category]}`;
@@ -159,7 +163,8 @@ const highlights = {
     black: '#000',
     grey: '#888',
     red: '#ce3939',
-    green: '#4caf7d',
+    lightGreen: '#4caf7d',
+    brightGreen: '#409309',
     orange: '#ff8c38',
     yellow: '#e9f05b',
     lightBlue: '#2fb4e0',
@@ -178,18 +183,20 @@ export function getExchangeSummaryColour(exchangeOrCategory: HttpExchange | Exch
             return highlights.black;
         case 'mutative':
             return highlights.red;
+        case 'data':
+            return highlights.purple;
+        case 'websocket':
+            return highlights.lightBlue;
         case 'image':
-            return highlights.green;
+            return highlights.lightGreen;
+        case 'font':
+            return highlights.brightGreen;
         case 'js':
             return highlights.orange;
         case 'css':
             return highlights.yellow;
         case 'html':
-            return highlights.lightBlue;
-        case 'font':
             return highlights.darkBlue;
-        case 'data':
-            return highlights.purple;
         case 'unknown':
             return highlights.grey;
     }
@@ -206,7 +213,9 @@ export function getStatusColor(status: undefined | 'aborted' | number, theme: Th
     } else if (status >= 300) {
         return highlights.darkBlue;
     } else if (status >= 200) {
-        return highlights.green;
+        return highlights.lightGreen;
+    } else if (status === 101) {
+        return highlights.lightBlue; // Almost always a websocket, so special case to match
     } else if (status >= 100) {
         return highlights.grey;
     }
@@ -215,9 +224,28 @@ export function getStatusColor(status: undefined | 'aborted' | number, theme: Th
     return highlights.black;
 }
 
+export function getWebSocketCloseColor(closeCode: undefined | 'aborted' | number, theme: Theme): string {
+    // See https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1 for definitions
+    if (!closeCode || closeCode === 'aborted') {
+        // All odd undefined/unknown cases
+        return theme.mainColor;
+    } else if (closeCode === 1000 || closeCode === 1001) {
+        // Closed OK or due to clean client/server shutdown
+        return highlights.lightGreen;
+    } else if (closeCode >= 1002 && closeCode <= 3000) {
+        // Closed due to some protocol errors
+        return highlights.red;
+    } else if (closeCode >= 3000) {
+        return highlights.orange;
+    }
+
+    // Anything else weird.
+    return highlights.black;
+}
+
 export function getMethodColor(method: string): string {
     if (method === 'GET') {
-        return highlights.green;
+        return highlights.lightGreen;
     } else if (method === 'POST') {
         return highlights.orange;
     } else if (method === 'DELETE') {

@@ -8,11 +8,13 @@ import { CollectedEvent, HtkResponse, HttpExchange } from '../../types';
 import { styled } from '../../styles';
 import { reportError } from '../../errors';
 
-import { getStatusColor } from '../../model/http/exchange-colors';
-import { ApiExchange } from '../../model/api/openapi';
 import { UiStore } from '../../model/ui-store';
 import { RulesStore } from '../../model/rules/rules-store';
+import { AccountStore } from '../../model/account/account-store';
+import { getStatusColor } from '../../model/http/exchange-colors';
+import { ApiExchange } from '../../model/api/openapi';
 import { buildRuleFromRequest } from '../../model/rules/rule-definitions';
+import { WebSocketStream } from '../../model/websockets/websocket-stream';
 
 import { Pill } from '../common/pill';
 import { CollapsibleCardHeading } from '../common/card';
@@ -21,7 +23,6 @@ import { ExchangeBodyCard } from './exchange-body-card';
 import { ExchangeApiCard, ExchangeApiPlaceholderCard } from './exchange-api-card';
 import { ExchangeRequestCard } from './exchange-request-card';
 import { ExchangeResponseCard } from './exchange-response-card';
-import { AccountStore } from '../../model/account/account-store';
 import { ExchangePerformanceCard } from './exchange-performance-card';
 import { ExchangeExportCard } from './exchange-export-card';
 import { ThemedSelfSizedEditor } from '../editor/base-editor';
@@ -31,6 +32,9 @@ import { ExchangeRequestBreakpointHeader, ExchangeResponseBreakpointHeader } fro
 import { ExchangeBreakpointRequestCard } from './exchange-breakpoint-request-card';
 import { ExchangeBreakpointResponseCard } from './exchange-breakpoint-response-card';
 import { ExchangeBreakpointBodyCard } from './exchange-breakpoint-body-card';
+
+import { WebSocketCloseCard } from './websocket-close-card';
+import { WebSocketMessageListCard } from './websocket-message-list-card';
 
 const OuterContainer = styled.div`
     height: 100%;
@@ -104,11 +108,20 @@ const cardKeys = [
     'requestBody',
     'response',
     'responseBody',
+    'webSocketMessages',
+    'webSocketClose',
     'performance',
     'export'
 ] as const;
 
 type CardKey = typeof cardKeys[number];
+
+type CardBaseProps = {
+    key: string,
+    expanded: boolean,
+    collapsed: boolean,
+    onCollapseToggled: () => void
+};
 
 @inject('uiStore')
 @inject('accountStore')
@@ -119,6 +132,7 @@ export class ExchangeDetailsPane extends React.Component<{
 
     requestEditor: portals.HtmlPortalNode<typeof ThemedSelfSizedEditor>,
     responseEditor: portals.HtmlPortalNode<typeof ThemedSelfSizedEditor>,
+    streamMessageEditor: portals.HtmlPortalNode<typeof ThemedSelfSizedEditor>,
 
     navigate: (path: string) => void,
     onDelete: (event: CollectedEvent) => void,
@@ -134,7 +148,7 @@ export class ExchangeDetailsPane extends React.Component<{
     @observable private expandCompleted = true;
 
     @computed
-    get cardProps() {
+    get cardProps(): { [name: string]: CardBaseProps } {
         return _.fromPairs(cardKeys.map((key) => [key, {
             key,
             expanded: key === this.props.uiStore!.expandedCard,
@@ -269,7 +283,7 @@ export class ExchangeDetailsPane extends React.Component<{
     }
 
     private renderExpandedCard(
-        expandedCard: 'requestBody' | 'responseBody',
+        expandedCard: 'requestBody' | 'responseBody' | 'webSocketMessages',
         exchange: HttpExchange,
         apiExchange: ApiExchange | undefined
     ) {
@@ -281,6 +295,12 @@ export class ExchangeDetailsPane extends React.Component<{
                 !!exchange.responseBreakpoint
             )) {
             return this.renderResponseBody(exchange, apiExchange);
+        } else if (
+            expandedCard === 'webSocketMessages' &&
+            exchange.isWebSocket() &&
+            exchange.wasAccepted()
+        ) {
+            return this.renderWebSocketMessages(exchange);
         } else {
             reportError(`Expanded ${expandedCard}, but can't show anything`);
             return null; // Shouldn't ever happen, unless we get into a funky broken state
@@ -378,18 +398,32 @@ export class ExchangeDetailsPane extends React.Component<{
             }
         }
 
-        // Push all cards below this point to the bottom
-        cards.push(<CardDivider key='divider' />);
+        if (exchange.isWebSocket() && exchange.wasAccepted()) {
+            cards.push(this.renderWebSocketMessages(exchange));
 
-        cards.push(<ExchangePerformanceCard
-            exchange={exchange}
-            {...this.cardProps.performance}
-        />);
+            if (exchange.closeState) {
+                cards.push(<WebSocketCloseCard
+                    {...this.cardProps.webSocketClose}
+                    theme={uiStore!.theme}
+                    closeState={exchange.closeState}
+                />);
+            }
+        } else {
+            // We only show performance & export for non-websockets, for now:
 
-        cards.push(<ExchangeExportCard
-            exchange={exchange}
-            {...this.cardProps.export}
-        />);
+            // Push all cards below this point to the bottom
+            cards.push(<CardDivider key='divider' />);
+
+            cards.push(<ExchangePerformanceCard
+                exchange={exchange}
+                {...this.cardProps.performance}
+            />);
+
+            cards.push(<ExchangeExportCard
+                exchange={exchange}
+                {...this.cardProps.export}
+            />);
+        }
 
         return cards;
     }
@@ -400,6 +434,7 @@ export class ExchangeDetailsPane extends React.Component<{
         return requestBreakpoint
             ? <ExchangeBreakpointBodyCard
                 {...this.requestBodyParams()}
+                exchangeId={exchange.id}
                 body={requestBreakpoint.inProgressResult.body.decoded}
                 headers={requestBreakpoint.inProgressResult.headers}
                 onChange={requestBreakpoint.updateBody}
@@ -419,6 +454,7 @@ export class ExchangeDetailsPane extends React.Component<{
         return responseBreakpoint
             ? <ExchangeBreakpointBodyCard
                 {...this.responseBodyParams()}
+                exchangeId={exchange.id}
                 body={responseBreakpoint.inProgressResult.body.decoded}
                 headers={responseBreakpoint.inProgressResult.headers}
                 onChange={responseBreakpoint.updateBody}
@@ -430,6 +466,26 @@ export class ExchangeDetailsPane extends React.Component<{
                 message={response as HtkResponse}
                 apiBodySchema={apiExchange?.response?.bodySchema}
             />;
+    }
+
+    private renderWebSocketMessages(exchange: WebSocketStream) {
+        return <WebSocketMessageListCard
+            {...this.cardProps.webSocketMessages}
+
+            // Link the key to the exchange, to ensure selected-message state gets
+            // reset when we switch between exchanges:
+            key={`${this.cardProps.webSocketMessages.key}-${this.props.exchange.id}`}
+            streamId={this.props.exchange.id}
+
+            expanded={this.props.uiStore!.expandedCard === 'webSocketMessages'}
+            onExpandToggled={this.toggleExpand.bind(this, 'webSocketMessages')}
+
+            editorNode={this.props.streamMessageEditor}
+
+            isPaidUser={this.props.accountStore!.isPaidUser}
+            url={exchange.request.url}
+            messages={exchange.messages}
+        />;
     }
 
     // The common request body params, for both normal & breakpointed bodies
@@ -458,15 +514,14 @@ export class ExchangeDetailsPane extends React.Component<{
     }
 
     @action.bound
-    private toggleCollapse(key: CardKey) {
+    private toggleCollapse(key: string) {
         const { viewExchangeCardStates } = this.props.uiStore!;
 
-        const cardState = viewExchangeCardStates[key];
+        const cardState = viewExchangeCardStates[key as CardKey];
         cardState.collapsed = !cardState.collapsed;
 
         this.props.uiStore!.expandedCard = undefined;
     }
-
 
     @action.bound
     private toggleExpand(key: CardKey) {
@@ -474,7 +529,11 @@ export class ExchangeDetailsPane extends React.Component<{
 
         if (uiStore.expandedCard === key) {
             uiStore.expandedCard = undefined;
-        } else if (key === 'requestBody' || key === 'responseBody') {
+        } else if (
+            key === 'requestBody' ||
+            key === 'responseBody' ||
+            key === 'webSocketMessages'
+        ) {
             uiStore.viewExchangeCardStates[key].collapsed = false;
             uiStore.expandedCard = key;
 

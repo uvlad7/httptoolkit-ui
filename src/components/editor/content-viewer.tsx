@@ -1,12 +1,13 @@
 import * as React from 'react';
 import * as _ from 'lodash';
+import { reaction, computed } from 'mobx';
 import { observer } from 'mobx-react';
-import { computed } from 'mobx';
 import { SchemaObject } from 'openapi3-ts';
 import * as portals from 'react-reverse-portal';
 
 import { css, styled } from '../../styles';
 import { ObservablePromise, isObservablePromise } from '../../util/observable';
+import { asError } from '../../util/error';
 
 import { ViewableContentType } from '../../model/http/content-types';
 import { Formatters, isEditorFormatter } from '../../model/http/body-formatting';
@@ -22,6 +23,13 @@ interface ContentViewerProps {
     contentType: ViewableContentType;
     editorNode: portals.HtmlPortalNode<typeof ThemedSelfSizedEditor>;
     cache: Map<Symbol, unknown>;
+
+    // See BaseEditor.props.contentid
+    contentId: string | null;
+
+    // Called after content was successfully rendered into the editor. This may be immediate and uninteresting in
+    // simple cases, or it may take longer if the content is large with a complex format (1MB of formatted JSON).
+    onContentRendered?: () => void;
 }
 
 const ViewerContainer = styled.div<{ scrollable: boolean }>`
@@ -38,6 +46,20 @@ export class ContentViewer extends React.Component<ContentViewerProps> {
 
     constructor(props: ContentViewerProps) {
         super(props);
+
+        // Every time the rendered content changes, as long as it's not a 'loading' promise,
+        // we fire a callback to notify that the content has been rendered.
+        reaction(() => {
+            try {
+                return this.renderedContent;
+            } catch (e) {}
+        }, (newValue) => {
+            if (newValue && !isObservablePromise(newValue)) {
+                requestAnimationFrame(() => {
+                    this.props.onContentRendered?.();
+                });
+            }
+        }, { fireImmediately: true });
     }
 
     @computed
@@ -91,6 +113,7 @@ export class ContentViewer extends React.Component<ContentViewerProps> {
                     return <LoadingCardContent height='500px' />;
                 } else {
                     return <portals.OutPortal<typeof ThemedSelfSizedEditor>
+                        contentId={this.props.contentId}
                         node={this.props.editorNode}
                         options={this.editorOptions}
                         language={this.formatter.language}
@@ -102,7 +125,7 @@ export class ContentViewer extends React.Component<ContentViewerProps> {
             } catch (e) {
                 return <div>
                     Failed to render {this.props.contentType} content:<br/>
-                    {e.toString()}
+                    { asError(e).toString() }
                 </div>;
             }
         } else {

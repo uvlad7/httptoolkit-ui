@@ -3,7 +3,9 @@ import type { ComponentClass } from 'react';
 import type {
     InitiatedRequest as MockttpInitiatedRequest,
     CompletedRequest as MockttpCompletedRequest,
-    CompletedResponse as MockttpResponse
+    CompletedResponse as MockttpResponse,
+    WebSocketMessage as MockttpWebSocketMessage,
+    WebSocketClose as MockttpWebSocketClose
 } from 'mockttp';
 import type {
     Headers,
@@ -23,6 +25,7 @@ import type {
 
 import type { ObservablePromise } from './util/observable';
 import type { HttpExchange } from './model/http/exchange';
+import type { WebSocketStream } from './model/websockets/websocket-stream';
 import type { TrafficSource } from './model/http/sources';
 import type { ViewableContentType } from './model/http/content-types';
 
@@ -39,6 +42,9 @@ export type InputCompletedRequest = MockttpCompletedRequest | HarRequest;
 export type InputRequest = InputInitiatedRequest | InputCompletedRequest;
 export type InputResponse = MockttpResponse | HarResponse;
 export type InputMessage = InputRequest | InputResponse;
+
+export type InputWebSocketMessage = MockttpWebSocketMessage;
+export type InputWebSocketClose = MockttpWebSocketClose;
 
 export interface BreakpointBody {
     decoded: Buffer;
@@ -104,6 +110,7 @@ export type MessageBody = {
 export type { HttpExchange };
 export type CollectedEvent =
     | HttpExchange
+    | WebSocketStream
     | FailedTlsRequest;
 export type ExchangeMessage = HtkRequest | HtkResponse;
 

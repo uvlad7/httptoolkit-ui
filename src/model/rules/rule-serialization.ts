@@ -6,9 +6,8 @@ import * as serializr from 'serializr';
 import { hasSerializrSchema, serializeAsTag } from '../serialization';
 
 import { RulesStore } from './rules-store';
-import { MatcherLookup, HandlerLookup } from './rules';
+import { HtkMockRule, MatcherLookup, HandlerLookup, getRulePartKey } from './rules';
 import {
-    HtkMockRule,
     HtkMockItem,
     HtkMockRuleRoot,
     isRuleGroup,
@@ -25,9 +24,10 @@ const deserializeByType = <T extends { type: string, uiType?: string }>(
     lookup: _.Dictionary<any>,
     args: DeserializationArgs
 ) => {
-    // uiType allows us to override deserialization for UI representations only,
-    // but keep the same serialization type for real Mockttp rules.
-    const clazz = lookup[data.uiType || data.type];
+    const typeKey = getRulePartKey(data);
+    const clazz = lookup[typeKey];
+
+    if (!clazz) throw new Error(`Can't load unrecognized rule type: ${typeKey}`);
 
     if (hasSerializrSchema(clazz)) {
         return serializr.deserialize(clazz, data, () => {}, args);
@@ -49,12 +49,22 @@ const MockRuleSerializer = serializr.custom(
             }
         });
 
-        if (hasSerializrSchema(data.handler)) {
-            data.handler = serializr.serialize(data.handler);
-        }
+        if ('steps' in data) {
+            data.steps = data.steps.map((step) => {
+                if (hasSerializrSchema(step)) {
+                    return serializr.serialize(step);
+                } else {
+                    return step;
+                }
+            });
+        } else {
+            if (hasSerializrSchema(data.handler)) {
+                data.handler = serializr.serialize(data.handler);
+            }
 
-        if (data.completionChecker && hasSerializrSchema(data.completionChecker)) {
-            data.completionChecker = serializr.serialize(data.completionChecker);
+            if ('completionChecker' in data && hasSerializrSchema(data.completionChecker)) {
+                data.completionChecker = serializr.serialize(data.completionChecker);
+            }
         }
 
         return data;
@@ -62,12 +72,20 @@ const MockRuleSerializer = serializr.custom(
     (data: HtkMockRule, context: { args: DeserializationArgs }) => {
         return {
             id: data.id,
+            type: data.type,
             activated: data.activated,
             matchers: data.matchers.map((m) =>
                 deserializeByType(m, MatcherLookup, context.args)
             ),
-            handler: deserializeByType(data.handler, HandlerLookup, context.args),
-            completionChecker: data.completionChecker &&
+            ...('steps' in data
+                ? {
+                    steps: data.steps.map((s) => deserializeByType(s, HandlerLookup, context.args))
+                }
+                : {
+                    handler: deserializeByType(data.handler, HandlerLookup, context.args),
+                }
+            ),
+            completionChecker: 'completionChecker' in data &&
                 deserializeByType(
                     data.completionChecker,
                     completionCheckers.CompletionCheckerLookup,

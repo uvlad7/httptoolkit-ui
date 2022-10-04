@@ -8,8 +8,7 @@ import type {
     ParameterObject,
     ResponseObject,
     RequestBodyObject,
-    SchemaObject,
-    ParameterLocation
+    SchemaObject
 } from 'openapi-directory';
 import * as Ajv from 'ajv';
 
@@ -22,9 +21,16 @@ import {
 } from "../../types";
 import { firstMatch, empty, lastHeader } from '../../util';
 import { formatAjvError } from '../../util/json-schema';
-import { reportError } from '../../errors';
 
-import { ApiMetadata } from './build-openapi';
+import {
+    ApiExchange,
+    ApiService,
+    ApiOperation,
+    ApiRequest,
+    ApiResponse,
+    ApiParameter
+} from './api-interfaces';
+import { OpenApiMetadata } from './build-api-metadata';
 import { fromMarkdown } from '../markdown';
 
 const paramValidator = new Ajv({
@@ -32,38 +38,14 @@ const paramValidator = new Ajv({
     unknownFormats: 'ignore' // OpenAPI uses some non-standard formats
 });
 
-// If we match multiple APIs, build all of them, try to match each one
-// against the request, and return only the matching one. This happens if
-// multiple services have the exact same base request URL (rds.amazonaws.com)
-export function findBestMatchingApi(apis: ApiMetadata[], request: HtkRequest): ApiMetadata | undefined {
-    const matchingApis = apis.filter((api) => matchOperation(api, request).matched);
-
-    // If we've successfully found one matching API, return it
-    if (matchingApis.length === 1) return matchingApis[0];
-
-    // If this is a non-matching request to one of these APIs, but we're not
-    // sure which, return the one with the most paths (as a best guess metric of
-    // which is the most popular service)
-    if (matchingApis.length === 0) return _.maxBy(apis, a => a.spec.paths.length)!;
-
-    // Otherwise we've matched multiple APIs which all define operations that
-    // could be this one request. Does exist right now (e.g. AWS RDS vs DocumentDB)
-
-    // Report this so we can try to improve & avoid in future.
-    reportError('Overlapping APIs', matchingApis);
-
-    // Return our guess of the most popular service, from the matching services only
-    return _.maxBy(matchingApis, a => a.spec.paths.length)!;
-}
-
-function getPath(api: ApiMetadata, request: HtkRequest): {
+function getPath(api: OpenApiMetadata, request: HtkRequest): {
     pathSpec: PathObject,
     path: string
 } | undefined {
     const { parsedUrl } = request;
 
     // Request URL without query params
-    const url = `${parsedUrl.protocol}//${parsedUrl.hostname}${parsedUrl.pathname}`;
+    const url = `${parsedUrl.protocol}//${parsedUrl.host}${parsedUrl.pathname}`;
 
     // Test the base server up front, just to keep things quick
     if (!api.serverMatcher.exec(url)) return;
@@ -94,7 +76,7 @@ export function getParameters(
     path: string,
     parameters: ParameterObject[],
     request: HtkRequest
-): Parameter[] {
+): ApiParameter[] {
     if (!parameters) return [];
 
     const query = request.parsedUrl.searchParams;
@@ -270,7 +252,7 @@ export function getBodySchema(
     );
 }
 
-function getDummyPath(api: ApiMetadata, request: HtkRequest): string {
+function getDummyPath(api: OpenApiMetadata, request: HtkRequest): string {
     const { parsedUrl } = request;
     const url = `${parsedUrl.protocol}//${parsedUrl.hostname}${parsedUrl.pathname}`;
     const serverMatch = api.serverMatcher.exec(url);
@@ -292,16 +274,18 @@ function stripTags(input: string | undefined): string | undefined {
     return input.replace(/(<([^>]+)>)/ig, '');
 }
 
-export class ApiExchange {
-    constructor(api: ApiMetadata, exchange: HttpExchange) {
+export class OpenApiExchange implements ApiExchange {
+    constructor(api: OpenApiMetadata, exchange: HttpExchange) {
+        this.isBuiltInApi = api.spec.info['x-httptoolkit-builtin-api'] === true;
+
         const { request } = exchange;
-        this.service = new ApiService(api.spec);
+        this.service = new OpenApiService(api.spec);
 
         this._spec = api.spec;
-        this._opSpec = matchOperation(api, request);
+        this._opSpec = matchOpenApiOperation(api, request);
 
-        this.operation = new ApiOperation(this._opSpec);
-        this.request = new ApiRequest(api.spec, this._opSpec, request);
+        this.operation = new OpenApiOperation(this._opSpec);
+        this.request = new OpenApiRequest(api.spec, this._opSpec, request);
 
         if (exchange.response) {
             this.updateWithResponse(exchange.response);
@@ -311,6 +295,8 @@ export class ApiExchange {
     private _spec: OpenAPIObject;
     private _opSpec: MatchedOperation;
 
+    public readonly isBuiltInApi: boolean;
+
     public readonly service: ApiService;
     public readonly operation: ApiOperation;
     public readonly request: ApiRequest;
@@ -319,7 +305,7 @@ export class ApiExchange {
 
     updateWithResponse(response: HtkResponse | 'aborted' | undefined): void {
         if (response === 'aborted' || response === undefined) return;
-        this.response = new ApiResponse(this._spec, this._opSpec, response);
+        this.response = new OpenApiResponse(this._spec, this._opSpec, response);
     }
 
     matchedOperation() {
@@ -327,23 +313,27 @@ export class ApiExchange {
     }
 }
 
-class ApiService {
+class OpenApiService implements ApiService {
     constructor(spec: OpenAPIObject) {
         const { info: service } = spec;
 
         this.name = service.title;
-        this.logoUrl = service['x-logo']?.url
+        this.shortName = service['x-httptoolkit-short-name']
+            ?? this.name.split(' ')[0];
+
+        this.logoUrl = service['x-logo']?.url;
         this.description = fromMarkdown(service.description);
-        this.docsUrl = get(spec, 'externalDocs', 'url');
+        this.docsUrl = spec?.externalDocs?.url;
     }
 
+    public readonly shortName: string;
     public readonly name: string;
     public readonly logoUrl?: string;
     public readonly description?: Html;
     public readonly docsUrl?: string;
 }
 
-function matchOperation(api: ApiMetadata, request: HtkRequest) {
+export function matchOpenApiOperation(api: OpenApiMetadata, request: HtkRequest) {
     const matchingPath = getPath(api, request);
 
     const { pathSpec, path } = matchingPath || {
@@ -366,9 +356,9 @@ function matchOperation(api: ApiMetadata, request: HtkRequest) {
     };
 }
 
-type MatchedOperation = ReturnType<typeof matchOperation>;
+type MatchedOperation = ReturnType<typeof matchOpenApiOperation>;
 
-class ApiOperation {
+class OpenApiOperation implements ApiOperation {
     constructor(
         op: MatchedOperation
     ) {
@@ -411,7 +401,7 @@ class ApiOperation {
     warnings: string[] = [];
 }
 
-class ApiRequest {
+class OpenApiRequest implements ApiRequest {
     constructor(
         spec: OpenAPIObject,
         op: MatchedOperation,
@@ -430,24 +420,11 @@ class ApiRequest {
         );
     }
 
-    parameters: Parameter[];
+    parameters: ApiParameter[];
     bodySchema?: SchemaObject;
 }
 
-export interface Parameter {
-    name: string;
-    description?: Html;
-    value?: unknown;
-    defaultValue?: unknown;
-    enum?: unknown[];
-    type?: string;
-    in: ParameterLocation;
-    required: boolean;
-    deprecated: boolean;
-    warnings: string[];
-}
-
-class ApiResponse {
+class OpenApiResponse implements ApiResponse {
     constructor(
         spec: OpenAPIObject,
         op: MatchedOperation,

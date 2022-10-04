@@ -2,7 +2,7 @@ import * as _ from 'lodash';
 import * as dedent from 'dedent';
 
 import { isRuleGroup } from './rules-structure';
-import { buildDefaultGroup } from './rule-definitions';
+import { buildDefaultGroupWrapper } from './rule-creation';
 
 // Take some raw serialized rule data, exported from any version of the app since HTTP Mock was
 // launched, and convert it into raw modern rule data, ready to be deserialized.
@@ -22,7 +22,7 @@ export function migrateRuleData(data: any) {
             if (defaultRules.length) {
                 data.items = [
                     ...otherRules,
-                    buildDefaultGroup(defaultRules)
+                    buildDefaultGroupWrapper(defaultRules)
                 ];
             } else {
                 data.items = otherRules;
@@ -52,9 +52,12 @@ function migrateRuleItem(item: any) {
 }
 
 function migrateRule(rule: any) {
+    // Migrate rules from the HTTP-only days into a world with rules for other protocols:
+    if (rule.type === undefined) rule.type = 'http';
+
     const { handler } = rule;
 
-    if (handler.type === 'passthrough') {
+    if (handler?.type === 'passthrough') {
         // Handle the targetHost -> forwarding object change from Mockttp 0.18.1:
         if (handler.forwardToLocation && !handler.forwarding) {
             handler.forwarding = { targetHost: handler.forwardToLocation, updateHostHeader: true };

@@ -25,7 +25,7 @@ import registerUpdateWorker, { ServiceWorkerNoSupportError } from 'service-worke
 import { UiStore } from './model/ui-store';
 import { AccountStore } from './model/account/account-store';
 import { ProxyStore } from './model/proxy-store';
-import { EventsStore } from './model/http/events-store';
+import { EventsStore } from './model/events/events-store';
 import { RulesStore } from './model/rules/rules-store';
 import { InterceptorStore } from './model/interception/interceptor-store';
 import { ApiStore } from './model/api/api-store';
@@ -34,7 +34,9 @@ import { triggerServerUpdate } from './services/server-api';
 import { App } from './components/app';
 import { StorePoweredThemeProvider } from './components/store-powered-theme-provider';
 import { ErrorBoundary } from './components/error-boundary';
-import { serverVersion, lastServerVersion } from './services/service-versions';
+import { serverVersion, lastServerVersion, UI_VERSION } from './services/service-versions';
+
+console.log(`Initialising UI (version ${UI_VERSION})`);
 
 const APP_ELEMENT_SELECTOR = '#app';
 

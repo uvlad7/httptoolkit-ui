@@ -12,12 +12,12 @@ import { styled } from '../../../styles';
 
 import { Interceptor } from '../../../model/interception/interceptors';
 import { ProxyStore } from '../../../model/proxy-store';
-import { EventsStore } from '../../../model/http/events-store';
+import { EventsStore } from '../../../model/events/events-store';
 
 import {
     MethodMatchers,
     StaticResponseHandler
-} from '../../../model/rules/rule-definitions';
+} from '../../../model/rules/definitions/http-rule-definitions';
 import { RulesStore } from '../../../model/rules/rules-store';
 
 const ConfigContainer = styled.div`
@@ -80,6 +80,7 @@ export function setUpAndroidCertificateRule(
 ) {
     rulesStore.ensureRuleExists({
         id: 'default-android-certificate',
+        type: 'http',
         activated: true,
         matchers: [
             new MethodMatchers.GET(),
@@ -156,13 +157,13 @@ class AndroidConfig extends React.Component<{
     render() {
         const {
             certFingerprint,
-            serverPort,
+            httpProxyPort,
             externalNetworkAddresses
         } = this.props.proxyStore!;
 
         const setupParams ={
             addresses: externalNetworkAddresses,
-            port: serverPort,
+            port: httpProxyPort,
             certFingerprint: certFingerprint!
         };
 

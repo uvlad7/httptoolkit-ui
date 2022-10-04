@@ -14,12 +14,11 @@ import {
     HttpExchange,
     CollectedEvent,
     TimingEvents,
-    InputTlsRequest,
-    FailedTlsRequest
+    InputTLSRequest,
+    FailedTLSConnection
 } from '../../types';
 
 import { UI_VERSION } from '../../services/service-versions';
-import { isHttpExchange } from './exchange';
 import { getStatusMessage } from './http-docs';
 
 // We only include request/response bodies that are under 500KB
@@ -33,6 +32,9 @@ export interface Har extends HarFormat.Har {
 interface HarLog extends HarFormat.Log {
     // Custom field to expose failed TLS connections
     _tlsErrors: HarTlsErrorEntry[];
+
+    // Our extended version of HAR entries:
+    entries: HarEntry[];
 }
 
 export type RequestContentData = {
@@ -42,26 +44,34 @@ export type RequestContentData = {
     comment?: string;
 };
 
-interface ExtendedHarRequest extends HarFormat.Request {
-    _postDataDiscarded?: boolean;
+export interface ExtendedHarRequest extends HarFormat.Request {
+    _requestBodyStatus?:
+        | 'discarded:too-large'
+        | 'discarded:not-representable'
+        | 'discarded:not-decodable';
     _content?: RequestContentData;
 }
 
-export type HarEntry = HarFormat.Entry;
+export interface HarEntry extends HarFormat.Entry {
+    _pinned?: true;
+}
+
 export type HarTlsErrorEntry = {
     startedDateTime: string;
     time: number; // Floating-point high-resolution duration, in ms
     hostname?: string; // Undefined if connection fails before hostname received
-    cause: FailedTlsRequest['failureCause'];
+    cause: FailedTLSConnection['failureCause'];
 
     clientIPAddress: string;
     clientPort: number;
 }
 
 export async function generateHar(events: CollectedEvent[]): Promise<Har> {
-    const [exchanges, errors] = _.partition(events, isHttpExchange) as [
-        HttpExchange[], FailedTlsRequest[]
+    const [exchanges, otherEvents] = _.partition(events, e => e.isHttp()) as [
+        HttpExchange[], CollectedEvent[]
     ];
+
+    const errors = otherEvents.filter(e => e.isTLSFailure()) as FailedTLSConnection[];
 
     const sourcePages = getSourcesAsHarPages(exchanges);
     const entries = await Promise.all(exchanges.map(generateHarEntry));
@@ -135,7 +145,7 @@ export function generateHarRequest(
 
     if (request.body.decoded) {
         if (request.body.decoded.byteLength > HAR_BODY_SIZE_LIMIT) {
-            requestEntry._postDataDiscarded = true;
+            requestEntry._requestBodyStatus = 'discarded:too-large';
             requestEntry.comment = `Body discarded during HAR generation: longer than limit of ${HAR_BODY_SIZE_LIMIT} bytes`;
         } else {
             try {
@@ -145,6 +155,7 @@ export function generateHarRequest(
                 );
             } catch (e) {
                 if (e instanceof TypeError) {
+                    requestEntry._requestBodyStatus = 'discarded:not-representable';
                     requestEntry._content = {
                         text: request.body.decoded.toString('base64'),
                         size: request.body.decoded.byteLength,
@@ -155,6 +166,8 @@ export function generateHarRequest(
                 }
             }
         }
+    } else {
+        requestEntry._requestBodyStatus = 'discarded:not-decodable';
     }
 
     return requestEntry;
@@ -288,7 +301,7 @@ function getSourcesAsHarPages(exchanges: HttpExchange[]): HarFormat.Page[] {
             'startTime' in e.timingEvents
                 ? e.timingEvents.startTime
                 : Date.now()
-        ));
+        ), Date.now());
 
         return {
             id: source,
@@ -338,11 +351,12 @@ async function generateHarEntry(exchange: HttpExchange): Promise<HarEntry> {
             send: Math.max(sendDuration, 0),
             wait: Math.max(waitDuration, 0),
             receive: Math.max(receiveDuration, 0)
-        }
+        },
+        _pinned: exchange.pinned || undefined
     };
 }
 
-function generateHarTlsError(event: FailedTlsRequest): HarTlsErrorEntry {
+function generateHarTlsError(event: FailedTLSConnection): HarTlsErrorEntry {
     const timingEvents = event.timingEvents ?? {};
 
     const startTime = 'startTime' in timingEvents
@@ -367,7 +381,8 @@ export type ParsedHar = {
     requests: HarRequest[],
     responses: HarResponse[],
     aborts: HarRequest[],
-    tlsErrors: InputTlsRequest[]
+    tlsErrors: InputTLSRequest[]
+    pinnedIds: string[]
 };
 
 const sumTimings = (
@@ -388,7 +403,8 @@ export async function parseHar(harContents: unknown): Promise<ParsedHar> {
     const requests: HarRequest[] = [];
     const responses: HarResponse[] = [];
     const aborts: HarRequest[] = [];
-    const tlsErrors: InputTlsRequest[] = [];
+    const tlsErrors: InputTLSRequest[] = [];
+    const pinnedIds: string[] = []
 
     har.log.entries.forEach((entry, i) => {
         const id = baseId + i;
@@ -422,6 +438,8 @@ export async function parseHar(harContents: unknown): Promise<ParsedHar> {
         } else {
             aborts.push(request);
         }
+
+        if (entry._pinned) pinnedIds.push(id);
     });
 
     if (har.log._tlsErrors) {
@@ -441,7 +459,7 @@ export async function parseHar(harContents: unknown): Promise<ParsedHar> {
         });
     }
 
-    return { requests, responses, aborts, tlsErrors };
+    return { requests, responses, aborts, tlsErrors, pinnedIds };
 }
 
 // Mutatively cleans & returns the HAR, to tidy up irrelevant but potentially
@@ -518,12 +536,20 @@ function cleanRawHarData(harContents: any) {
             // and it's optional and we don't use it, so it's better to drop it entirely.
             entry.response.cookies = [];
         }
+
+        // We never use the 'cache' field, and it can be annoyingly invalid, so drop it.
+        entry.cache = {};
     });
 
     const pages = harContents?.log?.pages ?? [];
-    pages.forEach((page: any) => {
+    pages.forEach((page: HarFormat.Page) => {
         // FF doesn't give pages their (required) titles:
         if (page.title === undefined) page.title = page.id;
+
+        // All timings fields are optional, but some sources provide 'null' values (instead of -1)
+        // to mark missing data, which isn't valid. Fortunately, we never use this data, so we can
+        // just drop it entirely:
+        page.pageTimings = {};
     });
 
     return harContents;

@@ -3,16 +3,17 @@ import * as React from 'react';
 import { inject, observer } from 'mobx-react';
 
 import { styled } from '../../styles';
+import { UnreachableCheck } from '../../util/error';
 
 import { RulesStore } from '../../model/rules/rules-store';
 import { AccountStore } from '../../model/account/account-store';
 import {
     HandlerClass,
     Handler,
-    HandlerClassKey,
-    HandlerKeys,
-    HandlerLookup,
-    isPaidHandlerClass
+    AvailableHandlerKey,
+    HandlerClassKeyLookup,
+    isPaidHandlerClass,
+    RuleType,
 } from '../../model/rules/rules';
 import { summarizeHandlerClass } from '../../model/rules/rule-descriptions';
 import {
@@ -26,110 +27,178 @@ import {
     TimeoutHandler,
     CloseConnectionHandler,
     FromFileResponseHandler
-} from '../../model/rules/rule-definitions';
+} from '../../model/rules/definitions/http-rule-definitions';
+import {
+    WebSocketPassThroughHandler,
+    EchoWebSocketHandlerDefinition,
+    RejectWebSocketHandlerDefinition,
+    ListenWebSocketHandlerDefinition
+} from '../../model/rules/definitions/websocket-rule-definitions';
+import {
+    EthereumCallResultHandler,
+    EthereumNumberResultHandler,
+    EthereumHashResultHandler,
+    EthereumReceiptResultHandler,
+    EthereumBlockResultHandler,
+    EthereumErrorHandler
+} from '../../model/rules/definitions/ethereum-rule-definitions';
+import {
+    IpfsCatTextHandler,
+    IpfsCatFileHandler,
+    IpfsAddResultHandler,
+    IpnsResolveResultHandler,
+    IpnsPublishResultHandler,
+    IpfsPinsResultHandler,
+    IpfsPinLsResultHandler
+} from '../../model/rules/definitions/ipfs-rule-definitions';
+import {
+    DynamicProxyStepDefinition,
+    EchoStepDefinition,
+    CloseStepDefinition,
+    WaitForMediaStepDefinition,
+    WaitForDurationStepDefinition,
+    WaitForChannelStepDefinition,
+    WaitForMessageStepDefinition,
+    CreateChannelStepDefinition,
+    SendStepDefinition
+} from '../../model/rules/definitions/rtc-rule-definitions';
 
 import { Select } from '../common/inputs';
-import {
-    serverVersion,
-    versionSatisfies,
-    FROM_FILE_HANDLER_SERVER_RANGE,
-    PASSTHROUGH_TRANSFORMS_RANGE
-} from '../../services/service-versions';
 
 const getHandlerKey = (h: HandlerClass | Handler) =>
-    HandlerKeys.get(h as any) || HandlerKeys.get(h.constructor as any);
-const getHandlerClassByKey = (k: HandlerClassKey) => HandlerLookup[k];
+    HandlerClassKeyLookup.get(h as any) || HandlerClassKeyLookup.get(h.constructor as any);
 
 const HandlerOptions = (p: { handlers: Array<HandlerClass> }) => <>{
     p.handlers.map((handler): JSX.Element | null => {
-        const key = getHandlerKey(handler);
-        const description = summarizeHandlerClass(handler);
+        const key = getHandlerKey(handler)!;
+        const description = summarizeHandlerClass(key);
 
-        return description
-            ? <option key={key} value={key}>
-                { description }
-            </option>
-            : null;
+        return <option key={key} value={key}>
+            { description }
+        </option>;
     })
 }</>;
 
 const HandlerSelect = styled(Select)`
-    margin-top: 20px;
+    &:not(:first-of-type) {
+        margin-top: 10px;
+    }
 `;
 
 const instantiateHandler = (
-    handlerClass: HandlerClass,
+    handlerKey: AvailableHandlerKey,
     rulesStore: RulesStore
-): Handler | undefined => {
-    switch (handlerClass) {
-        case StaticResponseHandler:
+): Handler => {
+    switch (handlerKey) {
+        case 'simple':
             return new StaticResponseHandler(200);
-        case FromFileResponseHandler:
+        case 'file':
             return new FromFileResponseHandler(200, undefined, '');
-        case PassThroughHandler:
+        case 'passthrough':
             return new PassThroughHandler(rulesStore);
-        case ForwardToHostHandler:
+        case 'ws-passthrough':
+            return new WebSocketPassThroughHandler(rulesStore);
+        case 'forward-to-host':
             return new ForwardToHostHandler('', true, rulesStore);
-        case TransformingHandler:
+        case 'req-res-transformer':
             return new TransformingHandler(rulesStore, {}, {});
-        case RequestBreakpointHandler:
+        case 'request-breakpoint':
             return new RequestBreakpointHandler(rulesStore);
-        case ResponseBreakpointHandler:
+        case 'response-breakpoint':
             return new ResponseBreakpointHandler(rulesStore);
-        case RequestAndResponseBreakpointHandler:
+        case 'request-and-response-breakpoint':
             return new RequestAndResponseBreakpointHandler(rulesStore);
-        case TimeoutHandler:
+        case 'timeout':
             return new TimeoutHandler();
-        case CloseConnectionHandler:
+        case 'close-connection':
             return new CloseConnectionHandler();
+
+        case 'ws-echo':
+            return new EchoWebSocketHandlerDefinition();
+        case 'ws-reject':
+            return new RejectWebSocketHandlerDefinition(400);
+        case 'ws-listen':
+            return new ListenWebSocketHandlerDefinition();
+
+        case 'eth-call-result':
+            return new EthereumCallResultHandler([], []);
+        case 'eth-number-result':
+            return new EthereumNumberResultHandler(0);
+        case 'eth-hash-result':
+            return new EthereumHashResultHandler('0x0');
+        case 'eth-receipt-result':
+            return new EthereumReceiptResultHandler(undefined);
+        case 'eth-block-result':
+            return new EthereumBlockResultHandler(undefined);
+        case 'eth-error':
+            return new EthereumErrorHandler('Unknown Error');
+
+        case 'ipfs-cat-text':
+            return new IpfsCatTextHandler('');
+        case 'ipfs-cat-file':
+            return new IpfsCatFileHandler('');
+        case 'ipfs-add-result':
+            return new IpfsAddResultHandler();
+        case 'ipns-resolve-result':
+            return new IpnsResolveResultHandler();
+        case 'ipns-publish-result':
+            return new IpnsPublishResultHandler();
+        case 'ipfs-pins-result':
+            return new IpfsPinsResultHandler();
+        case 'ipfs-pin-ls-result':
+            return new IpfsPinLsResultHandler();
+
+        case 'rtc-dynamic-proxy':
+            return new DynamicProxyStepDefinition();
+        case 'echo-rtc':
+            return new EchoStepDefinition();
+        case 'close-rtc-connection':
+            return new CloseStepDefinition();
+        case 'wait-for-rtc-media':
+            return new WaitForMediaStepDefinition();
+        case 'wait-for-duration':
+            return new WaitForDurationStepDefinition(0);
+        case 'wait-for-rtc-data-channel':
+            return new WaitForChannelStepDefinition();
+        case 'wait-for-rtc-message':
+            return new WaitForMessageStepDefinition();
+        case 'create-rtc-data-channel':
+            return new CreateChannelStepDefinition('mock-channel');
+        case 'send-rtc-data-message':
+            return new SendStepDefinition(undefined, '');
+
+        default:
+            throw new UnreachableCheck(handlerKey);
     }
 }
-
-const supportsFileHandlers = () =>
-    _.isString(serverVersion.value) &&
-    versionSatisfies(serverVersion.value, FROM_FILE_HANDLER_SERVER_RANGE);
-
-const supportsTransforms = () =>
-    _.isString(serverVersion.value) &&
-    versionSatisfies(serverVersion.value, PASSTHROUGH_TRANSFORMS_RANGE);
 
 export const HandlerSelector = inject('rulesStore', 'accountStore')(observer((p: {
     rulesStore?: RulesStore,
     accountStore?: AccountStore,
+    ruleType: RuleType,
+    availableHandlers: Array<HandlerClass>,
     value: Handler,
     onChange: (handler: Handler) => void
 }) => {
-    const allHandlers = [
-        StaticResponseHandler,
-        supportsFileHandlers() && FromFileResponseHandler,
-        PassThroughHandler,
-        ForwardToHostHandler,
-        supportsTransforms() && TransformingHandler,
-        RequestBreakpointHandler,
-        ResponseBreakpointHandler,
-        RequestAndResponseBreakpointHandler,
-        TimeoutHandler,
-        CloseConnectionHandler
-    ].filter(Boolean);
+    let [ allowedHandlers, needProHandlers ] = _.partition(
+        p.availableHandlers,
+        (handlerClass) => p.accountStore!.isPaidUser || !isPaidHandlerClass(p.ruleType, handlerClass)
+    );
 
-    // Do some type tricks to make TS understand that we've filtered 'false' out of the handlers.
-    type DefinedHandler = Exclude<typeof allHandlers[number], false>;
-
-    const [ availableHandlers, needProHandlers ] = _.partition<DefinedHandler>(
-        allHandlers as DefinedHandler[],
-        (handlerClass) => p.accountStore!.isPaidUser || !isPaidHandlerClass(handlerClass)
+    // Pull the breakpoint handlers to the top, since they're kind of separate
+    allowedHandlers = _.sortBy(allowedHandlers, h =>
+        getHandlerKey(h)!.includes('breakpoint') ? 0 : 1
     );
 
     return <HandlerSelect
         value={getHandlerKey(p.value)}
         onChange={(event) => {
-            const handlerClass = getHandlerClassByKey(event.target.value as HandlerClassKey);
-            const handler = instantiateHandler(handlerClass, p.rulesStore!);
-            if (!handler) return;
+            const handlerKey = event.target.value as AvailableHandlerKey;
+            const handler = instantiateHandler(handlerKey, p.rulesStore!);
             p.onChange(handler);
         }}
     >
-        <HandlerOptions handlers={availableHandlers} />
+        <HandlerOptions handlers={allowedHandlers} />
         { needProHandlers.length &&
             <optgroup label='With HTTP Toolkit Pro:'>
                 <HandlerOptions handlers={needProHandlers} />

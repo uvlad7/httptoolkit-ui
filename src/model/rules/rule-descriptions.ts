@@ -1,121 +1,230 @@
 import * as _ from 'lodash';
-import { RequestRuleData, matchers } from "mockttp";
 
-import { MatcherClass, HandlerClass } from "./rules";
+import { UnreachableCheck } from '../../util/error';
+
 import {
-    WildcardMatcher,
-    DefaultWildcardMatcher,
-    MethodMatchers,
-    StaticResponseHandler,
-    ForwardToHostHandler,
-    TransformingHandler,
-    RequestBreakpointHandler,
-    ResponseBreakpointHandler,
-    RequestAndResponseBreakpointHandler,
-    PassThroughHandler,
-    TimeoutHandler,
-    CloseConnectionHandler,
-    FromFileResponseHandler
-} from './rule-definitions';
+    HtkMockRule,
+    RuleType,
+    HandlerClassKey,
+    MatcherClassKey
+} from "./rules";
+import {
+    MethodMatchers
+} from './definitions/http-rule-definitions';
 
 function withFirstCharUppercased(input: string): string {
     return input[0].toUpperCase() + input.slice(1);
 }
 
-// Summarize a single type of matcher (for listing matcher options)
-export function summarizeMatcherClass(matcher: MatcherClass): string | undefined {
-    switch (matcher) {
-        case WildcardMatcher:
-        case DefaultWildcardMatcher:
-        case matchers.WildcardMatcher:
-            return "Any requests";
-        case matchers.MethodMatcher:
-            return "Requests using method";
-        case matchers.HostMatcher:
-            return "For a host";
-        case matchers.SimplePathMatcher:
-            return "For a URL";
-        case matchers.RegexPathMatcher:
-            return "For URLs matching";
-        case matchers.QueryMatcher:
-            return "With query parameters including";
-        case matchers.ExactQueryMatcher:
-            return "With exact query string";
-        case matchers.HeaderMatcher:
-            return "Including headers";
-        case matchers.CookieMatcher:
-            return "With cookie";
-        case matchers.RawBodyMatcher:
-            return "With exact body";
-        case matchers.RawBodyIncludesMatcher:
-            return "With body including";
-        case matchers.FormDataMatcher:
-            return "With form data";
-        case matchers.JsonBodyMatcher:
-            return "With JSON body";
-        case matchers.JsonBodyFlexibleMatcher:
-            return "With JSON body including";
-    }
-
-    // One case to catch the various specific method matchers
-    const method = _.findKey(MethodMatchers, m => m === matcher);
-    if (method) {
-        return `${method} requests`;
-    }
-
-    // For anything unknown
-    return undefined;
+const isMethod = (key: any): key is keyof typeof MethodMatchers => {
+    return key in MethodMatchers;
 };
 
-export function summarizeHandlerClass(handler: HandlerClass): string | undefined {
-    switch (handler) {
-        case StaticResponseHandler:
-            return "Return a fixed response";
-        case FromFileResponseHandler:
-            return "Return a response from a file";
-        case ForwardToHostHandler:
-            return "Forward the request to a different host";
-        case PassThroughHandler:
-            return "Pass the request on to its destination";
-        case TransformingHandler:
-            return "Transform the real request or response automatically";
-        case RequestBreakpointHandler:
-            return "Pause the request to manually edit it";
-        case ResponseBreakpointHandler:
-            return "Pause the response to manually edit it";
-        case RequestAndResponseBreakpointHandler:
-            return "Pause the request & response to manually edit them";
-        case TimeoutHandler:
-            return "Time out with no response";
-        case CloseConnectionHandler:
-            return "Close the connection immediately";
+// Summarize a single type of matcher (for listing matcher options)
+export function summarizeMatcherClass(key: MatcherClassKey): string {
+    if (isMethod(key)) return `${key} requests`;
+
+    switch (key) {
+        case 'wildcard':
+        case 'default-wildcard':
+            return "Any requests";
+        case 'ws-wildcard':
+        case 'default-ws-wildcard':
+            return 'Any WebSocket';
+        case 'rtc-wildcard':
+            return "Any WebRTC connection";
+
+        case 'method':
+            return "Sent with HTTP method";
+        case 'host':
+            return "For a host";
+        case 'simple-path':
+            return "For a URL";
+        case 'regex-path':
+            return "For URLs matching";
+        case 'query':
+            return "With query parameters including";
+        case 'exact-query-string':
+            return "With exact query string";
+        case 'header':
+            return "Including headers";
+        case 'cookie':
+            return "With cookie";
+        case 'raw-body':
+            return "With exact body";
+        case 'raw-body-includes':
+            return "With body including";
+        case 'form-data':
+            return "With form data";
+        case 'json-body':
+            return "With JSON body";
+        case 'json-body-matching':
+            return "With JSON body including";
+        case 'protocol':
+            return "With protocol";
+        case 'port':
+            return "For port";
+        case 'hostname':
+            return "For hostname";
+
+        case 'eth-method':
+            return "An Ethereum interaction";
+        case 'eth-params':
+            return "With Ethereum parameters matching";
+
+        case 'ipfs-interaction':
+            return "An IPFS interaction";
+        case 'ipfs-arg':
+            return "With IPFS argument";
+
+        case 'has-rtc-data-channel':
+            return "Including a data channel";
+        case 'has-rtc-video-track':
+            return "Including a video track";
+        case 'has-rtc-audio-track':
+            return "Including an audio track";
+        case 'has-rtc-media-track':
+            return "Including any media track";
+        case 'rtc-page-hostname':
+            return "Sent from a web page on a specific hostname";
+        case 'rtc-page-regex':
+            return "Sent from a web page matching a URL regex";
+        case 'rtc-user-agent-regex':
+            return "Sent by a user agent matching a regex";
+
+        case 'am-i-using':
+        case 'callback':
+        case 'multipart-form-data':
+        case 'raw-body-regexp':
+            throw new Error(`${key} handler should not be used directly`);
         default:
-            return undefined;
+            throw new UnreachableCheck(key);
+    }
+};
+
+export function summarizeHandlerClass(key: HandlerClassKey): string {
+    switch (key) {
+        case 'simple':
+            return "Return a fixed response";
+        case 'file':
+            return "Return a response from a file";
+        case 'forward-to-host':
+            return "Forward the request to a different host";
+        case 'passthrough':
+            return "Pass the request on to its destination";
+        case 'ws-passthrough':
+            return "Pass the WebSocket through to its destination";
+        case 'req-res-transformer':
+            return "Transform the real request or response automatically";
+        case 'request-breakpoint':
+            return "Pause the request to manually edit it";
+        case 'response-breakpoint':
+            return "Pause the response to manually edit it";
+        case 'request-and-response-breakpoint':
+            return "Pause the request & response to manually edit them";
+        case 'timeout':
+            return "Time out with no response";
+        case 'close-connection':
+            return "Close the connection immediately";
+
+        case 'ws-reject':
+            return "Reject the WebSocket setup request";
+        case 'ws-listen':
+            return "Accept the WebSocket but send no messages";
+        case 'ws-echo':
+            return "Echo all messages";
+
+        case 'eth-call-result':
+            return "Return a fixed eth_call result";
+        case 'eth-number-result':
+        case 'eth-hash-result':
+            return "Return a fixed value";
+        case 'eth-receipt-result':
+            return "Return a fixed transaction receipt";
+        case 'eth-block-result':
+            return "Return fixed Ethereum block data";
+        case 'eth-error':
+            return "Return an Ethereum error response";
+
+        case 'ipfs-cat-text':
+            return "Return fixed IPFS content";
+        case 'ipfs-cat-file':
+            return "Return IPFS content from a file";
+        case 'ipfs-add-result':
+            return "Return a fixed IPFS add result";
+        case 'ipns-resolve-result':
+            return "Return a fixed IPNS resolved address";
+        case 'ipns-publish-result':
+            return "Return a fixed succesful IPNS result";
+        case 'ipfs-pins-result':
+            return "Return a fixed IPFS pinning result";
+        case 'ipfs-pin-ls-result':
+            return "Return a fixed list of IPFS pins";
+
+        case 'wait-for-duration':
+            return "Sleep for a given duration";
+        case 'wait-for-rtc-data-channel':
+            return "Wait for a data channel to be opened";
+        case 'wait-for-rtc-track':
+            return "Wait for a media track to be opened";
+        case 'wait-for-rtc-media':
+            return "Wait for any media to be received";
+        case 'wait-for-rtc-message':
+            return "Wait for a data message to be received";
+        case 'create-rtc-data-channel':
+            return "Create a data channel";
+        case 'send-rtc-data-message':
+            return "Send a data message";
+        case 'close-rtc-connection':
+            return "Close the WebRTC connection";
+        case 'echo-rtc':
+            return "Echo all messages and media";
+        case 'rtc-dynamic-proxy':
+            return "Proxy all traffic to the real remote peer";
+
+        case 'json-rpc-response':
+        case 'rtc-peer-proxy':
+        case 'callback':
+        case 'stream':
+            throw new Error(`${key} handler should not be used directly`);
+        default:
+            throw new UnreachableCheck(key);
     }
 }
 
 // Summarize the matchers of an instantiated rule
 // Slight varation on the Mockttp explanation to make the
 // comma positioning more consistent for UX of changing rules
-export function summarizeMatcher(rule: RequestRuleData): string {
+export function summarizeMatcher(rule: HtkMockRule): string {
     const { matchers } = rule;
 
     if (matchers.length === 0) return 'Never';
-    if (matchers.length === 1) return matchers[0].explain();
+    if (matchers.length === 1) return matchers[0]!.explain();
     if (matchers.length === 2) {
         // With just two explanations you can just combine them
-        return `${matchers[0].explain()} ${matchers[1].explain()}`;
+        return `${matchers[0]!.explain()} ${matchers[1].explain()}`;
     }
 
     // With 3+, we need to oxford comma separate the later
     // explanations, to make them readable
-    return matchers[0].explain() + ' ' +
+    return matchers[0]!.explain() + ' ' +
         matchers.slice(1, -1)
         .map((m) => m.explain())
-        .join(', ') + ', and ' + matchers.slice(-1)[0].explain();
+        .join(', ') +
+        (matchers.length > 3 ? ', and ' : ', ') + // We 'and' only with *many*
+        matchers.slice(-1)[0].explain();
 }
 
 // Summarize the handler of an instantiated rule
-export function summarizeHandler(rule: RequestRuleData): string {
-    return withFirstCharUppercased(rule.handler.explain());
+export function summarizeHandler(rule: HtkMockRule): string {
+    if ('steps' in rule) {
+        const stepExplanations = rule.steps.map(s => s.explain());
+        return withFirstCharUppercased(
+            stepExplanations.length > 1
+            ? (stepExplanations.slice(0, -1).join(', ') + ' then ' + stepExplanations.slice(-1)[0])
+            : stepExplanations[0]
+        );
+    } else {
+        return withFirstCharUppercased(rule.handler.explain());
+    }
 }

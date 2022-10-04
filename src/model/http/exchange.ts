@@ -1,8 +1,7 @@
 import * as _ from 'lodash';
-import { observable, computed, action, runInAction } from 'mobx';
+import { observable, computed, action, runInAction, when } from 'mobx';
 
 import {
-    CollectedEvent,
     HtkRequest,
     HtkResponse,
     Headers,
@@ -23,17 +22,20 @@ import {
     asHeaderArray,
     lastHeader,
 } from '../../util';
+import { UnreachableCheck } from '../../util/error';
 import { lazyObservablePromise, ObservablePromise, observablePromise } from "../../util/observable";
 
 import { reportError } from '../../errors';
 
 import { parseSource } from './sources';
-import { getContentType } from './content-types';
-import { getExchangeCategory, ExchangeCategory } from './exchange-colors';
+import { getContentType } from '../events/content-types';
+import { HTKEventBase } from '../events/event-base';
 
 import { ApiStore } from '../api/api-store';
-import { ApiExchange } from '../api/openapi';
-import { ApiMetadata } from '../api/build-openapi';
+import { ApiExchange } from '../api/api-interfaces';
+import { OpenApiExchange } from '../api/openapi';
+import { parseRpcApiExchange } from '../api/jsonrpc';
+import { ApiMetadata } from '../api/api-interfaces';
 import { decodeBody } from '../../services/ui-worker-api';
 import {
     RequestBreakpoint,
@@ -42,11 +44,6 @@ import {
     getResponseBreakpoint,
     getDummyResponseBreakpoint
 } from './exchange-breakpoint';
-import type { WebSocketStream } from '../websockets/websocket-stream';
-
-export function isHttpExchange(event: CollectedEvent): event is HttpExchange {
-    return 'request' in event;
-}
 
 function tryParseUrl(request: InputRequest): (URL & { parseable: true }) | undefined  {
     try {
@@ -56,11 +53,8 @@ function tryParseUrl(request: InputRequest): (URL & { parseable: true }) | undef
         );
     } catch (e) {
         console.log('Unparseable URL:', request.url);
-
-        // Don't bother reporting empty URLs - we use these as placeholders for some bad requests
-        if (request.url === 'http://' || request.url === 'https://') return;
-
-        reportError(e);
+        // There are many unparseable URLs, especially when unintentionally intercepting traffic
+        // from non-HTTP sources, so we don't report this - we just log locally & return undefined.
     }
 }
 
@@ -83,7 +77,7 @@ function addRequestMetadata(request: InputRequest): HtkRequest {
         return Object.assign(request, {
             parsedUrl: tryParseUrl(request) || getFallbackUrl(request),
             source: parseSource(request.headers['user-agent']),
-            body: new ExchangeBody(request, request.headers),
+            body: new HttpBody(request, request.headers),
             contentType: getContentType(lastHeader(request.headers['content-type'])) || 'text',
             cache: observable.map(new Map<symbol, unknown>(), { deep: false })
         }) as HtkRequest;
@@ -95,7 +89,7 @@ function addRequestMetadata(request: InputRequest): HtkRequest {
 
 function addResponseMetadata(response: InputResponse): HtkResponse {
     return Object.assign(response, {
-        body: new ExchangeBody(response, response.headers),
+        body: new HttpBody(response, response.headers),
         contentType: getContentType(
             // There should only ever be one. If we get multiple though, just use the last.
             lastHeader(response.headers['content-type'])
@@ -104,7 +98,7 @@ function addResponseMetadata(response: InputResponse): HtkResponse {
     }) as HtkResponse;
 }
 
-export class ExchangeBody implements MessageBody {
+export class HttpBody implements MessageBody {
 
     constructor(
         message: InputMessage,
@@ -177,9 +171,11 @@ export type SuccessfulExchange = Omit<HttpExchange, 'response'> & {
     response: HtkResponse
 };
 
-export class HttpExchange {
+export class HttpExchange extends HTKEventBase {
 
     constructor(apiStore: ApiStore, request: InputRequest) {
+        super();
+
         this.request = addRequestMetadata(request);
 
         this.timingEvents = request.timingEvents;
@@ -199,8 +195,6 @@ export class HttpExchange {
         .join('\n')
         .toLowerCase();
 
-        this.category = getExchangeCategory(this);
-
         // Start loading the relevant Open API specs for this request, if any.
         this._apiMetadataPromise = apiStore.getApi(this.request);
     }
@@ -219,12 +213,13 @@ export class HttpExchange {
     @observable
     public tags: string[];
 
-    @observable
-    public pinned: boolean = false;
-
     @computed
     get httpVersion() {
         return this.request.httpVersion === '2.0' ? 2 : 1;
+    }
+
+    isHttp(): this is HttpExchange {
+        return true;
     }
 
     isCompletedRequest(): this is CompletedRequest {
@@ -237,10 +232,6 @@ export class HttpExchange {
 
     isSuccessfulExchange(): this is SuccessfulExchange {
         return this.isCompletedExchange() && this.response !== 'aborted';
-    }
-
-    isWebSocket(): this is WebSocketStream {
-        return false;
     }
 
     hasRequestBody(): this is CompletedRequest {
@@ -258,14 +249,8 @@ export class HttpExchange {
     @observable.ref
     public response: HtkResponse | 'aborted' | undefined;
 
-    @observable
-    public searchIndex: string;
-
-    @observable
-    public category: ExchangeCategory;
-
     updateFromCompletedRequest(request: InputCompletedRequest) {
-        this.request.body = new ExchangeBody(request, request.headers);
+        this.request.body = new HttpBody(request, request.headers);
         this.matchedRuleId = request.matchedRuleId || "?";
 
         Object.assign(this.timingEvents, request.timingEvents);
@@ -278,7 +263,6 @@ export class HttpExchange {
 
         Object.assign(this.timingEvents, request.timingEvents);
         this.tags = _.union(this.tags, request.tags);
-        this.category = getExchangeCategory(this);
 
         if (this.requestBreakpoint) {
             this.requestBreakpoint.reject(
@@ -300,7 +284,6 @@ export class HttpExchange {
         Object.assign(this.timingEvents, response.timingEvents);
         this.tags = _.union(this.tags, response.tags);
 
-        this.category = getExchangeCategory(this);
         this.searchIndex = [
             this.searchIndex,
             response.statusCode.toString(),
@@ -344,8 +327,18 @@ export class HttpExchange {
         const apiMetadata = await this._apiMetadataPromise;
 
         if (apiMetadata) {
+            // We load the spec, but we don't try to parse API requests until we've received
+            // the whole thing (because e.g. JSON-RPC requests aren't parseable without the body)
+            await when(() => this.isCompletedRequest());
+
             try {
-                return new ApiExchange(apiMetadata, this);
+                if (apiMetadata.type === 'openapi') {
+                    return new OpenApiExchange(apiMetadata, this);
+                } else if (apiMetadata.type === 'openrpc') {
+                    return await parseRpcApiExchange(apiMetadata, this);
+                } else {
+                    throw new UnreachableCheck(apiMetadata, m => m.type);
+                }
             } catch (e) {
                 reportError(e);
                 throw e;

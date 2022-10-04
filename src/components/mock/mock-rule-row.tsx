@@ -4,14 +4,38 @@ import * as polished from 'polished';
 import { observer, inject, disposeOnUnmount, Observer } from 'mobx-react';
 import { action, observable, reaction } from 'mobx';
 import { Method, matchers } from 'mockttp';
-import { Draggable, DraggingStyle, NotDraggingStyle, DraggableStateSnapshot } from 'react-beautiful-dnd';
+import {
+    Draggable,
+    DraggingStyle,
+    NotDraggingStyle,
+    DraggableStateSnapshot
+} from 'react-beautiful-dnd';
 
 import { styled, css } from '../../styles';
 import { Icon } from '../../icons';
 
-import { getMethodColor } from '../../model/http/exchange-colors';
-import { Matcher, Handler, isPaidHandler } from '../../model/rules/rules';
-import { HtkMockRule, ItemPath } from '../../model/rules/rules-structure';
+import { getMethodColor, getSummaryColour } from '../../model/events/categorization';
+import {
+    HtkMockRule,
+    Matcher,
+    Handler,
+    AvailableHandler,
+    isPaidHandler,
+    InitialMatcher,
+    getRuleTypeFromInitialMatcher,
+    isCompatibleHandler,
+    getAvailableAdditionalMatchers,
+    getAvailableHandlers,
+    RuleType,
+    HandlerStep,
+    isFinalHandler,
+    isStepPoweredRule
+} from '../../model/rules/rules';
+import { ItemPath } from '../../model/rules/rules-structure';
+import {
+    getRuleDefaultMatchers,
+    updateRuleAfterInitialMatcherChange
+} from '../../model/rules/rule-creation';
 import {
     summarizeMatcher,
     summarizeHandler
@@ -30,6 +54,7 @@ import { HandlerSelector } from './handler-selection';
 import { HandlerConfiguration } from './handler-config';
 import { DragHandle } from './mock-drag-handle';
 import { IconMenu, IconMenuButton } from './mock-item-menu';
+import { UnreachableCheck } from '../../util/error';
 
 const RowContainer = styled(LittleCard)<{
     deactivated?: boolean,
@@ -148,16 +173,16 @@ const ArrowIcon = styled(Icon).attrs(() => ({
 `;
 
 const Details = styled.div`
-    margin-top: 20px;
-
     display: flex;
     flex-direction: column;
     text-align: left;
 `;
 
-const MatchersList = styled.ul`
+const DetailsHeader = styled.div`
     margin-top: 20px;
+    margin-bottom: 20px;
 `;
+
 
 const RuleMenuContainer = styled(IconMenu)`
     background-image: radial-gradient(
@@ -259,21 +284,12 @@ export class RuleRow extends React.Component<{
     resetRule: (path: ItemPath) => void;
     deleteRule: (path: ItemPath) => void;
     cloneRule: (path: ItemPath) => void;
+
+    getRuleDefaultHandler: (type: RuleType) => Handler;
 }> {
 
     initialMatcherSelect = React.createRef<HTMLSelectElement>();
     containerRef: HTMLElement | null = null;
-
-    @observable
-    demoHandler: Handler | undefined;
-
-    componentDidMount() {
-        // If the actual handler ever changes, dump our demo handler state:
-        disposeOnUnmount(this, reaction(
-            () => this.props.rule.handler,
-            () => { this.demoHandler = undefined; }
-        ));
-    }
 
     render() {
         const {
@@ -290,24 +306,36 @@ export class RuleRow extends React.Component<{
             getPro
         } = this.props.accountStore!;
 
+        const ruleType = rule.type;
         const initialMatcher = rule.matchers.length ? rule.matchers[0] : undefined;
 
-        let method: string | undefined;
-        if (initialMatcher instanceof matchers.MethodMatcher) {
-            method = Method[initialMatcher.method];
-        } else if (initialMatcher !== undefined) {
-            method = 'unknown';
+        let ruleColour: string;
+        if (ruleType === 'http') {
+            if (initialMatcher instanceof matchers.MethodMatcher) {
+                ruleColour = getMethodColor(Method[initialMatcher.method]);
+            } else if (initialMatcher !== undefined) {
+                ruleColour = getMethodColor('unknown');
+            } else {
+                ruleColour = 'transparent';
+            }
+        } else if (ruleType === 'websocket') {
+            ruleColour = getSummaryColour('websocket');
+        } else if (ruleType === 'ethereum') {
+            ruleColour = getSummaryColour('mutative');
+        } else if (ruleType === 'ipfs') {
+            ruleColour = getSummaryColour('html');
+        } else if (ruleType === 'webrtc') {
+            ruleColour = getSummaryColour('rtc-data');
         } else {
-            method = undefined;
+            throw new UnreachableCheck(ruleType);
         }
 
-        // Handlers are in demo mode (uneditable, behind a 'Get Pro' overlay), either if the rule
-        // has a handler you can't use, or you've picked a Pro handler and its been put in demoHandler
-        const isHandlerDemo = !isPaidUser && (this.demoHandler || isPaidHandler(rule.handler));
+        const availableMatchers = getAvailableAdditionalMatchers(ruleType);
+        const availableHandlers = getAvailableHandlers(ruleType, initialMatcher);
 
-        const ruleHandler = isHandlerDemo
-            ? (this.demoHandler || rule.handler)
-            : rule.handler
+        const ruleHandlers = 'handler' in rule
+            ? [rule.handler]
+            : rule.steps;
 
         return <Draggable
             draggableId={rule.id}
@@ -316,10 +344,7 @@ export class RuleRow extends React.Component<{
         >{ (provided, snapshot) => <Observer>{ () =>
             <RowContainer
                 {...provided.draggableProps}
-                borderColor={method
-                    ? getMethodColor(method)
-                    : 'transparent'
-                }
+                borderColor={ruleColour}
                 ref={(ref: HTMLElement | null) => {
                     provided.innerRef(ref);
                     this.containerRef = ref;
@@ -354,13 +379,13 @@ export class RuleRow extends React.Component<{
 
                     {
                         !collapsed && <Details>
-                            <div>Match:</div>
+                            <DetailsHeader>Match:</DetailsHeader>
 
-                            <MatchersList>
+                            <ul>
                                 <InitialMatcherRow
                                     ref={this.initialMatcherSelect}
                                     matcher={initialMatcher}
-                                    onChange={(...ms) => this.updateMatcher(0, ...ms)}
+                                    onChange={this.setInitialMatcher}
                                 />
 
                                 { rule.matchers.slice(1).map((matcher, i) =>
@@ -375,11 +400,13 @@ export class RuleRow extends React.Component<{
 
                                 { rule.matchers.length > 0 &&
                                     <NewMatcherRow
+                                        key={rule.type} // Reset when type changes
+                                        availableMatchers={availableMatchers}
                                         existingMatchers={rule.matchers}
                                         onAdd={this.addMatcher}
                                     />
                                 }
-                            </MatchersList>
+                            </ul>
                         </Details>
                     }
                 </MatcherOrHandler>
@@ -393,26 +420,22 @@ export class RuleRow extends React.Component<{
 
                     {
                         !collapsed && <Details>
-                            <div>Then:</div>
-                            <HandlerSelector
-                                value={ruleHandler}
-                                onChange={this.updateHandler}
-                            />
+                            <DetailsHeader>Then:</DetailsHeader>
 
-                            { isHandlerDemo
-                                // If you select a paid handler with an unpaid account,
-                                // show a handler demo with a 'Get Pro' overlay:
-                                ? <GetProOverlay getPro={getPro} source={`rule-${ruleHandler.type}`}>
-                                    <HandlerConfiguration
-                                        handler={ruleHandler}
-                                        onChange={_.noop}
-                                    />
-                                </GetProOverlay>
-                                : <HandlerConfiguration
+                            { ruleHandlers.map((ruleHandler, i) =>
+                                <HandlerStepSection
+                                    key={i}
+
                                     handler={ruleHandler}
-                                    onChange={this.updateHandler}
+                                    handlerIndex={i}
+
+                                    isPaidUser={isPaidUser}
+                                    getPro={getPro}
+                                    ruleType={ruleType}
+                                    availableHandlers={availableHandlers}
+                                    updateHandler={this.updateHandler}
                                 />
-                            }
+                            )}
                         </Details>
                     }
                 </MatcherOrHandler>
@@ -450,30 +473,164 @@ export class RuleRow extends React.Component<{
     });
 
     @action.bound
+    setInitialMatcher(matcher: InitialMatcher) {
+        const currentRuleType = this.props.rule.type;
+        const newRuleType = getRuleTypeFromInitialMatcher(matcher);
+
+        if (currentRuleType === newRuleType) {
+            this.props.rule.matchers[0] = matcher;
+        } else {
+            this.props.rule.type = newRuleType;
+
+            this.props.rule.matchers = getRuleDefaultMatchers(
+                newRuleType,
+                matcher,
+                this.props.rule.matchers // Update from the old matchers
+            ) as any[];
+        }
+
+        // Reset the rule handler/steps, if incompatible:
+        const handlerResetRequired = 'handler' in this.props.rule
+            ? !isCompatibleHandler(this.props.rule.handler, matcher)
+            : !this.props.rule.steps.every(step => isCompatibleHandler(step, matcher));
+
+        if (handlerResetRequired) {
+            const newHandler = this.props.getRuleDefaultHandler(newRuleType);
+            if (isStepPoweredRule(this.props.rule)) {
+                (this.props.rule as { steps: HandlerStep[] }).steps = [newHandler as HandlerStep];
+                delete (this.props.rule as any).handler;
+            } else {
+                (this.props.rule as { handler: Handler }).handler = newHandler;
+                delete (this.props.rule as any).steps;
+            }
+        }
+
+        updateRuleAfterInitialMatcherChange(this.props.rule);
+    }
+
+    @action.bound
     addMatcher(matcher: Matcher) {
-        this.props.rule.matchers.push(matcher);
+        // TS struggles with complex union types here, so we cast more generally:
+        const rule = this.props.rule as { matchers: Matcher[] };
+        rule.matchers.push(matcher);
     }
 
     @action.bound
     updateMatcher(index: number, ...matchers: Matcher[]) {
-        this.props.rule.matchers.splice(index, 1, ...matchers);
+        // TS struggles with complex union types here, so we cast more generally:
+        const rule = this.props.rule as { matchers: Matcher[] };
+        rule.matchers.splice(index, 1, ...matchers);
     }
 
     @action.bound
     deleteMatcher(matcher: Matcher) {
-        const { rule } = this.props;
+        // TS struggles with complex union types here, so we cast more generally:
+        const rule = this.props.rule as { matchers: Matcher[] };
         rule.matchers = rule.matchers.filter(m => m !== matcher);
     }
 
     @action.bound
-    updateHandler(handler: Handler) {
-        const { isPaidUser } = this.props.accountStore!;
+    updateHandler(handlerIndex: number, handler: Handler) {
+        // TS struggles with complex union types here, so we cast more generally:
+        const rule = this.props.rule as
+            | { handler: Handler }
+            | { steps: HandlerStep[] };
 
-        if (isPaidUser || !isPaidHandler(handler)) {
-            this.demoHandler = undefined;
-            this.props.rule.handler = handler;
+        if ('handler' in rule) {
+            if (handlerIndex !== 0) throw new Error('Single-handler rules cannot have additional steps');
+            rule.handler = handler;
         } else {
-            this.demoHandler = handler;
+            rule.steps[handlerIndex] = handler as HandlerStep;
+
+            if (isFinalHandler(handler)) {
+                // If this is final, slice off anything after this step, it's all invalid
+                rule.steps = rule.steps.slice(0, handlerIndex + 1);
+            } else {
+                // If at any point you change the last step to be a non-final step, we append a default
+                // (must be final) step to allow continuing the rule:
+                if (handlerIndex === rule.steps.length - 1) {
+                    rule.steps.push(this.props.getRuleDefaultHandler(this.props.rule.type) as HandlerStep);
+                }
+            }
         }
     }
+}
+
+@observer
+class HandlerStepSection extends React.Component<{
+    isPaidUser: boolean;
+    getPro: (source: string) => void;
+    ruleType: RuleType;
+    handlerIndex: number;
+    handler: Handler;
+
+    availableHandlers: AvailableHandler[];
+    updateHandler: (handlerIndex: number, handler: Handler) => void;
+}> {
+
+    @observable
+    private demoHandler: Handler | undefined;
+
+    componentDidMount() {
+        // If the actual handler ever changes, dump our demo handler state:
+        disposeOnUnmount(this, reaction(
+            () => this.props.handler,
+            () => { this.demoHandler = undefined; }
+        ));
+    }
+
+    render() {
+        const {
+            isPaidUser,
+            getPro,
+            ruleType,
+            availableHandlers,
+            handler
+        } = this.props;
+
+        const shownHandler = this.demoHandler ?? handler;
+
+        const isHandlerDemo = !isPaidUser &&
+            shownHandler &&
+            isPaidHandler(ruleType, shownHandler);
+
+        return <>
+            <HandlerSelector
+                value={shownHandler}
+                ruleType={ruleType}
+                onChange={this.updateHandler}
+                availableHandlers={availableHandlers}
+            />
+
+            { isHandlerDemo
+                // If you select a paid handler with an unpaid account,
+                // show a handler demo with a 'Get Pro' overlay:
+                ? <GetProOverlay getPro={getPro} source={`rule-${handler.type}`}>
+                    <HandlerConfiguration
+                        ruleType={ruleType}
+                        handler={shownHandler}
+                        onChange={_.noop}
+                    />
+                </GetProOverlay>
+                : <HandlerConfiguration
+                    ruleType={ruleType}
+                    handler={shownHandler}
+                    onChange={this.updateHandler}
+                />
+            }
+        </>;
+    }
+
+    @action.bound
+    updateHandler(handler: Handler) {
+        const { isPaidUser, handlerIndex, ruleType, updateHandler } = this.props;
+
+        // You can never update a paid handler if you're not a paid user
+        if (!isPaidUser && isPaidHandler(ruleType, handler)) {
+            this.demoHandler = handler;
+        } else {
+            updateHandler(handlerIndex, handler);
+        }
+    }
+
 }

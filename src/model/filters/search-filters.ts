@@ -5,8 +5,8 @@ import { joinAnd } from '../../util';
 
 import { HttpExchange } from '../http/exchange';
 import { getStatusDocs } from '../http/http-docs';
-import { getReadableSize } from '../http/bodies';
-import { ExchangeCategories } from '../http/exchange-colors';
+import { getReadableSize } from '../events/bodies';
+import { EventCategories } from '../events/categorization';
 import { WebSocketStream } from '../websockets/websocket-stream';
 
 import {
@@ -15,6 +15,8 @@ import {
     SyntaxPartValues
 } from './syntax-matching';
 import {
+    ALPHABETICAL,
+    ALPHANUMERIC,
     charRange,
     CombinedSyntax,
     FixedLengthNumberSyntax,
@@ -297,7 +299,7 @@ class StatusFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             event.isSuccessfulExchange() &&
             this.predicate(event.response.statusCode, this.status);
     }
@@ -318,7 +320,7 @@ class CompletedFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             event.isSuccessfulExchange();
     }
 
@@ -338,7 +340,7 @@ class PendingFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             !event.isCompletedExchange();
     }
 
@@ -358,7 +360,7 @@ class AbortedFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             event.response === 'aborted'
     }
 
@@ -378,7 +380,7 @@ class ErrorFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return !(event instanceof HttpExchange) || // TLS Error
+        return !(event.isHttp()) || // TLS Error
             event.tags.some(tag =>
                 tag.startsWith('client-error') ||
                 tag.startsWith('passthrough-error')
@@ -390,12 +392,31 @@ class ErrorFilter extends Filter {
     }
 }
 
+class PinnedFilter extends Filter {
+
+    static filterSyntax = [new FixedStringSyntax("pinned")] as const;
+
+    static filterName = "pinned";
+
+    static filterDescription(value: string) {
+        return "exchanges that are pinned";
+    }
+
+    matches(event: CollectedEvent): boolean {
+        return event.pinned;
+    }
+
+    toString() {
+        return `Pinned`;
+    }
+}
+
 class CategoryFilter extends Filter {
 
     static filterSyntax = [
         new FixedStringSyntax("category"),
         new FixedStringSyntax("="), // Separate, so initial suggestions are names only
-        new StringOptionsSyntax(ExchangeCategories)
+        new StringOptionsSyntax(EventCategories)
     ] as const;
 
     static filterName = "category";
@@ -419,7 +440,7 @@ class CategoryFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             event.category === this.expectedCategory
     }
 
@@ -437,13 +458,10 @@ class MethodFilter extends Filter {
             "!="
         ]),
         new StringSyntax("method", {
-            allowedChars: [
-                charRange('a', 'z'),
-                charRange('A', 'Z')
-            ],
+            allowedChars: ALPHABETICAL,
             suggestionGenerator: (_v, _i, events: CollectedEvent[]) =>
                 _(events)
-                .map(e => 'request' in e && e.request.method)
+                .map(e => e.isHttp() && e.request.method)
                 .uniq()
                 .filter(Boolean)
                 .valueOf() as string[]
@@ -485,7 +503,7 @@ class MethodFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(event.request.method.toUpperCase(), this.expectedMethod);
     }
 
@@ -524,7 +542,7 @@ class HttpVersionFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             event.httpVersion === this.expectedVersion;
     }
 
@@ -592,7 +610,7 @@ class ProtocolFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        if (!(event instanceof HttpExchange)) return false;
+        if (!(event.isHttp())) return false;
 
         // Parsed protocol is like 'http:', so we strip the colon
         const protocol = event.request.parsedUrl.protocol.toLowerCase().slice(0, -1);
@@ -617,15 +635,13 @@ class HostnameFilter extends Filter {
         ]),
         new StringSyntax("hostname", {
             allowedChars: [
-                charRange("a", "z"),
-                charRange("A", "Z"),
-                charRange("0", "9"),
+                ...ALPHANUMERIC,
                 charRange("-"),
                 charRange(".")
             ],
             suggestionGenerator: (_v, _i, events: CollectedEvent[]) =>
                 _(events)
-                .map(e => 'request' in e && e.request.parsedUrl.hostname.toLowerCase())
+                .map(e => e.isHttp() && e.request.parsedUrl.hostname.toLowerCase())
                 .uniq()
                 .filter(Boolean)
                 .valueOf() as string[]
@@ -659,7 +675,7 @@ class HostnameFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(
                 event.request.parsedUrl.hostname.toLowerCase(),
                 this.expectedHostname
@@ -716,7 +732,7 @@ class PortFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        if (!(event instanceof HttpExchange)) return false;
+        if (!(event.isHttp())) return false;
 
         const { protocol, port: explicitPort } = event.request.parsedUrl;
         const port = parseInt((
@@ -725,7 +741,7 @@ class PortFilter extends Filter {
             0
         ).toString(), 10);
 
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(port, this.expectedPort);
     }
 
@@ -748,7 +764,7 @@ class PathFilter extends Filter {
         new StringSyntax("path", {
             suggestionGenerator: (_v, _i, events: CollectedEvent[]) =>
                 _(events)
-                .map(e => 'request' in e && e.request.parsedUrl.pathname)
+                .map(e => e.isHttp() && e.request.parsedUrl.pathname)
                 .uniq()
                 .filter(Boolean)
                 .valueOf() as string[]
@@ -780,7 +796,7 @@ class PathFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(event.request.parsedUrl.pathname, this.expectedPath);
     }
 
@@ -813,7 +829,7 @@ class QueryFilter extends Filter {
             },
             suggestionGenerator: (_v, _i, events: CollectedEvent[]) =>
                 _(events)
-                .map(e => 'request' in e && e.request.parsedUrl.search)
+                .map(e => e.isHttp() && e.request.parsedUrl.search)
                 .uniq()
                 .filter(Boolean)
                 .valueOf() as string[]
@@ -862,7 +878,7 @@ class QueryFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(event.request.parsedUrl.search, this.expectedQuery);
     }
 
@@ -872,7 +888,7 @@ class QueryFilter extends Filter {
 }
 
 const getAllHeaders = (e: CollectedEvent): [string, string | string[]][] => {
-    if (!(e instanceof HttpExchange)) return [];
+    if (!(e.isHttp())) return [];
     return [
         ...Object.entries(e.request.headers),
         ...(e.isSuccessfulExchange()
@@ -988,7 +1004,7 @@ class HeaderFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        if (!(event instanceof HttpExchange)) return false;
+        if (!(event.isHttp())) return false;
 
         const headers = getAllHeaders(event);
 
@@ -1053,7 +1069,7 @@ class BodySizeFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        if (!(event instanceof HttpExchange)) return false;
+        if (!(event.isHttp())) return false;
 
         const requestBody = event.request.body;
         const responseBody = event.isSuccessfulExchange()
@@ -1062,7 +1078,7 @@ class BodySizeFilter extends Filter {
         const totalSize = requestBody.encoded.byteLength +
             (responseBody?.encoded.byteLength || 0);
 
-        return event instanceof HttpExchange &&
+        return event.isHttp() &&
             this.predicate(totalSize, this.expectedSize);
     }
 
@@ -1119,7 +1135,7 @@ class BodyFilter extends Filter {
     }
 
     matches(event: CollectedEvent): boolean {
-        if (!(event instanceof HttpExchange)) return false;
+        if (!(event.isHttp())) return false;
         if (!event.isCompletedRequest()) return false; // No body yet, no match
 
         const requestBody = event.request.body.decoded;
@@ -1154,6 +1170,7 @@ const BaseSearchFilterClasses: FilterClass[] = [
     PendingFilter,
     AbortedFilter,
     ErrorFilter,
+    PinnedFilter,
     CategoryFilter,
     PortFilter,
     ProtocolFilter,
@@ -1226,7 +1243,7 @@ class NotFilter extends Filter {
 class OrFilter extends Filter {
 
     private static innerFilterSyntax = new SyntaxRepeaterSyntax(
-        ', ',
+        ',',
         new OptionsSyntax(
             BaseSearchFilterClasses.map(f =>
                 new CombinedSyntax(...f.filterSyntax)
@@ -1246,7 +1263,9 @@ class OrFilter extends Filter {
     static filterName = "or";
 
     static filterDescription(value: string, isTemplate: boolean) {
-        const innerValues = value.slice(3).split(', ');
+        if (value[value.length - 1] === ')') value = value.slice(0, -1);
+
+        const innerValues = value.slice(3).split(',').map(v => v.trim());
 
         if (innerValues.length === 1 && innerValues[0].length === 0) {
             return "exchanges that match any one of multiple conditions"
@@ -1281,7 +1300,7 @@ class OrFilter extends Filter {
     constructor(private filterValue: string) {
         super(filterValue);
 
-        this.innerFilters = filterValue.slice(3).split(', ').map((valuePart) => {
+        this.innerFilters = filterValue.slice(3, -1).split(',').map(v => v.trim()).map((valuePart) => {
             const matchingFilterClass = _.find(BaseSearchFilterClasses, (filter) =>
                 matchSyntax(filter.filterSyntax, valuePart, 0)?.type === 'full'
             )!;

@@ -1,13 +1,12 @@
 import * as _ from 'lodash';
 
 import {
-    completionCheckers,
     requestHandlers,
-    webSocketHandlers,
     MOCKTTP_PARAM_REF,
     ProxyConfig,
     ProxySetting
 } from 'mockttp';
+import * as MockRTC from 'mockrtc';
 
 import {
     observable,
@@ -35,10 +34,16 @@ import { reportError } from '../../errors';
 
 import { AccountStore } from '../account/account-store';
 import { ProxyStore } from '../proxy-store';
-import { EventsStore } from '../http/events-store';
+import { EventsStore } from '../events/events-store';
 import { getDesktopInjectedValue } from '../../services/desktop-api';
-import { WEBSOCKET_RULE_RANGE } from '../../services/service-versions';
+import { RTC_RULES_SUPPORTED, WEBSOCKET_RULE_RANGE } from '../../services/service-versions';
 
+import {
+    HtkMockRule,
+    isHttpBasedRule,
+    isWebSocketRule,
+    isRTCRule
+} from './rules';
 import {
     HtkMockRuleGroup,
     flattenRules,
@@ -53,15 +58,14 @@ import {
     HtkMockRuleRoot,
     isRuleRoot,
     HtkMockItem,
-    HtkMockRule,
-    areItemsEqual
+    areItemsEqual,
 } from './rules-structure';
 import {
-    buildDefaultGroup,
-    buildDefaultRules,
+    buildDefaultGroupRules,
+    buildDefaultGroupWrapper,
+    buildDefaultRulesRoot,
     buildForwardingRuleIntegration,
-    DefaultWildcardMatcher
-} from './rule-definitions';
+} from './rule-creation';
 import {
     serializeRules,
     deserializeRules,
@@ -121,6 +125,7 @@ export class RulesStore {
         const {
             setRequestRules,
             setWebSocketRules,
+            setRTCRules,
             serverVersion
         } = this.proxyStore;
 
@@ -147,28 +152,40 @@ export class RulesStore {
         );
 
         // Set the server rules, and subscribe future rule changes to update them later.
-        await new Promise((resolve) => {
+        await new Promise<void>((resolve) => {
             reaction(
                 () => _.cloneDeep( // Clone to retain the pre-serialization definitions.
                     flattenRules(this.rules)
                     // Drop inactive or never-matching rules
                     .filter(r => r.activated && r.matchers.length),
                 ),
-                (rules) => {
-                    resolve(Promise.all([
-                        setRequestRules(...rules),
-                        ...(semver.satisfies(serverVersion, WEBSOCKET_RULE_RANGE)
-                            ? [
-                                setWebSocketRules({
-                                    matchers: [new DefaultWildcardMatcher()],
-                                    completionChecker: new completionCheckers.Always(),
-                                    handler: new webSocketHandlers.PassThroughWebSocketHandler(
-                                        this.activePassthroughOptions
-                                    )
-                                })
-                            ] : []
-                        )
-                    ]))
+                async (rules) => {
+                    try {
+                        await Promise.all([
+                            setRequestRules(...rules.filter(isHttpBasedRule)),
+                            ...(semver.satisfies(serverVersion, WEBSOCKET_RULE_RANGE)
+                                ? [
+                                    setWebSocketRules(...rules.filter(isWebSocketRule))
+                                ] : []
+                            ),
+                            ...(semver.satisfies(serverVersion, RTC_RULES_SUPPORTED)
+                                ? [
+                                    setRTCRules(...rules.filter(isRTCRule).map(({ matchers, steps }) => ({
+                                        // We skip the first matcher, which is always an unused wildcard:
+                                        matchers: matchers.slice(1) as MockRTC.MatcherDefinitions.MatcherDefinition[],
+                                        steps
+                                    })))
+                                ] : []
+                            )
+                        ]);
+                        resolve();
+                    } catch (e) {
+                        console.log('Failed to activate stored rules', e, JSON.stringify(rules));
+                        reportError('Failed to activate configured ruleset');
+                        alert(`Configured rules could not be activated, so were reset to default.`);
+
+                        this.resetRulesToDefault(); // Should trigger the reaction above again, and thereby resolve().
+                    }
                 },
                 { fireImmediately: true }
             )
@@ -211,6 +228,16 @@ export class RulesStore {
                     rules: migrateRuleData(data.rules)
                 }),
                 customArgs: { rulesStore: this } as DeserializationArgs
+            }).catch((err) => {
+                console.log('Failed to load last-run rules',
+                    err,
+                    // Log the full rule data for debugging:
+                    JSON.parse(localStorage.getItem('rules-store') ?? '{}')?.rules
+                );
+
+                reportError(err);
+                alert(`Could not load rules from last run.\n\n${err}`);
+                // We then continue, which resets the rules exactly as if this was the user's first run.
             });
 
             if (!this.rules) {
@@ -219,6 +246,10 @@ export class RulesStore {
             } else {
                 // Drafts are never persisted, so always need resetting to match the just-loaded data:
                 this.resetRuleDrafts();
+
+                // Recreate default rules on startup, even if we're restoring persisted rules
+                const defaultRules = buildDefaultGroupRules(this, this.proxyStore);
+                defaultRules.forEach(r => this.ensureRuleExists(r));
             }
         } else {
             // For free users, reset rules to default (separately, so defaults can use settings loaded above)
@@ -330,10 +361,10 @@ export class RulesStore {
     @computed.struct
     get proxyConfig(): ProxyConfig {
         const { userProxyConfig } = this;
-        const serverPort = this.proxyStore.serverPort;
+        const { httpProxyPort } = this.proxyStore;
 
-        if (this.proxyStore.ruleParameterKeys.includes(dockerProxyRuleParamName(serverPort))) {
-            const dockerProxyConfig = { [MOCKTTP_PARAM_REF]: dockerProxyRuleParamName(serverPort) };
+        if (this.proxyStore.ruleParameterKeys.includes(dockerProxyRuleParamName(httpProxyPort))) {
+            const dockerProxyConfig = { [MOCKTTP_PARAM_REF]: dockerProxyRuleParamName(httpProxyPort) };
 
             return userProxyConfig
                 ? [dockerProxyConfig, userProxyConfig]
@@ -376,7 +407,7 @@ export class RulesStore {
     @action.bound
     resetRulesToDefault() {
         // Set the rules back to the default settings
-        this.rules = buildDefaultRules(this, this.proxyStore);
+        this.rules = buildDefaultRulesRoot(this, this.proxyStore);
         this.resetRuleDrafts();
     }
 
@@ -387,7 +418,7 @@ export class RulesStore {
 
     @computed
     get areSomeRulesNonDefault() {
-        const defaultRules = buildDefaultRules(this, this.proxyStore);
+        const defaultRules = buildDefaultRulesRoot(this, this.proxyStore);
         return !_.isEqualWith(this.draftRules, defaultRules, areItemsEqual);
     }
 
@@ -426,8 +457,7 @@ export class RulesStore {
 
                 if (targetDraftParentParent) {
                     targetDraftParent = missingParents.reduce(({ draftParent, activeParent }, missingGroup) => {
-                        const newGroup = observable(_.clone(_.omit(missingGroup, 'items')));
-                        newGroup.items = [];
+                        const newGroup = observable(_.clone({ ...missingGroup, items: [] }));
 
                         const draftCommonSiblings = _.intersectionBy(draftParent.items, activeParent.items, 'id');
                         const activeCommonSiblings = _.intersectionBy(activeParent.items, draftParent.items.concat(missingGroup), 'id');
@@ -692,7 +722,7 @@ export class RulesStore {
         let draftDefaultGroupPath = findItemPath(this.draftRules, { id: 'default-group' });
         if (!draftDefaultGroupPath) {
             // If there's no draft default rules at all, build one
-            this.draftRules.items.push(buildDefaultGroup([rule]));
+            this.draftRules.items.push(buildDefaultGroupWrapper([rule]));
             draftDefaultGroupPath = [this.draftRules.items.length - 1];
         } else {
             const draftDefaultGroup = getItemAtPath(this.draftRules, draftDefaultGroupPath) as HtkMockRuleGroup;

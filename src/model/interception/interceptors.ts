@@ -4,7 +4,8 @@ import { ServerInterceptor } from "../../services/server-api";
 import {
     versionSatisfies,
     DETAILED_CONFIG_RANGE,
-    DOCKER_INTERCEPTION_RANGE
+    DOCKER_INTERCEPTION_RANGE,
+    WEBRTC_GLOBALLY_ENABLED
 } from "../../services/service-versions";
 import { IconProps, SourceIcons } from "../../icons";
 import { AccountStore } from "../account/account-store";
@@ -32,7 +33,10 @@ interface InterceptorConfig {
         serverVersion?: string
     }) => boolean;
     uiConfig?: InterceptorCustomUiConfig;
-    getActivationOptions?: (options: { accountStore: AccountStore }) => unknown;
+    getActivationOptions?: (options: {
+        accountStore: AccountStore,
+        serverVersion?: string
+    }) => unknown;
     notAvailableHelpUrl?: string;
 }
 
@@ -57,6 +61,14 @@ const recoloured = (icon: IconProps, color: string) => ({ ...icon, color });
 
 export const MANUAL_INTERCEPT_ID = 'manual-setup';
 
+const getChromiumOptions = ({ accountStore, serverVersion }: {
+    accountStore: AccountStore,
+    serverVersion?: string
+}) => ({
+    webExtensionEnabled: accountStore.featureFlags.includes('webrtc') ||
+        versionSatisfies(serverVersion || '', WEBRTC_GLOBALLY_ENABLED)
+});
+
 const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
     'docker-attach': {
         name: 'Attach to Docker Container',
@@ -73,7 +85,8 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         name: 'Chrome',
         description: ["Intercept a fresh independent Chrome window"],
         iconProps: SourceIcons.Chrome,
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'existing-chrome': {
         name: 'Global Chrome',
@@ -86,43 +99,50 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             SourceIcons.Chrome,
             { icon: ['fas', 'globe'], color: '#fafafa', size: '2x' }
         ],
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-chrome-beta': {
         name: 'Chrome (beta)',
         description: ["Intercept a fresh independent Chrome window"],
         iconProps: recoloured(SourceIcons.Chrome, '#DB4437'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-chrome-dev': {
         name: 'Chrome (dev)',
         description: ["Intercept a fresh independent Chrome window"],
         iconProps: recoloured(SourceIcons.Chrome, '#74929f'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-chrome-canary': {
         name: 'Chrome (canary)',
         description: ["Intercept a fresh independent Chrome window"],
         iconProps: recoloured(SourceIcons.Chrome, '#e8ab01'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-chromium': {
         name: 'Chromium',
         description: ["Intercept a fresh independent Chromium window"],
         iconProps: SourceIcons.Chromium,
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-chromium-dev': {
         name: 'Chromium (dev)',
         description: ["Intercept a fresh independent Chromium window"],
         iconProps: recoloured(SourceIcons.Chromium, '#74929f'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-brave': {
         name: 'Brave',
         description: ["Intercept a fresh independent Brave window"],
         iconProps: SourceIcons.Brave,
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-firefox': {
         name: 'Firefox',
@@ -143,25 +163,29 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         name: 'Edge',
         description: ["Intercept a fresh independent Edge window"],
         iconProps: SourceIcons.Edge,
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-edge-beta': {
         name: 'Edge (beta)',
         description: ["Intercept a fresh independent Edge window"],
         iconProps: recoloured(SourceIcons.Edge, '#50e6ff'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-edge-dev': {
         name: 'Edge (dev)',
         description: ["Intercept a fresh independent Edge window"],
         iconProps: recoloured(SourceIcons.Edge, '#74929f'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-edge-canary': {
         name: 'Edge (canary)',
         description: ["Intercept a fresh independent Edge window"],
         iconProps: recoloured(SourceIcons.Edge, '#ffc225'),
-        tags: BROWSER_TAGS
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions
     },
     'fresh-opera': {
         name: 'Opera',
@@ -171,6 +195,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         checkRequirements: ({ interceptorVersion }) => {
             return versionSatisfies(interceptorVersion, "^1.0.3")
         },
+        getActivationOptions: getChromiumOptions
     },
     'attach-jvm': {
         name: 'Attach to JVM',
@@ -256,7 +281,8 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         iconProps: SourceIcons.Electron,
         uiConfig: ElectronCustomUi,
         checkRequirements: ({ interceptorVersion }) => {
-            return versionSatisfies(interceptorVersion, "^1.0.1")
+            return !navigator.platform.startsWith('Mac') &&
+                versionSatisfies(interceptorVersion, "^1.0.1")
         },
         tags: ['electron', 'desktop', 'postman']
     },
@@ -306,7 +332,10 @@ export function getInterceptOptions(
                 isActive: false,
                 isActivable: true,
                 activationOptions: option.getActivationOptions
-                    ? option.getActivationOptions({ accountStore })
+                    ? option.getActivationOptions({
+                        accountStore,
+                        serverVersion
+                    })
                     : undefined
             });
         } else {
@@ -318,7 +347,10 @@ export function getInterceptOptions(
                 id,
                 isSupported: true,
                 activationOptions: option.getActivationOptions
-                    ? option.getActivationOptions({ accountStore })
+                    ? option.getActivationOptions({
+                        accountStore,
+                        serverVersion
+                    })
                     : undefined
             });
         }

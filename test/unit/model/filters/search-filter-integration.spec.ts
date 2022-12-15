@@ -7,7 +7,7 @@ import { delay } from '../../../../src/util/promise';
 import { decodeBody } from '../../../../src/services/ui-worker-api';
 
 import { CollectedEvent } from '../../../../src/types';
-import { FailedTLSConnection } from '../../../../src/model/events/failed-tls-connection';
+import { FailedTlsConnection } from '../../../../src/model/tls/failed-tls-connection';
 import { HttpExchange, SuccessfulExchange } from '../../../../src/model/http/exchange';
 
 import { getExchangeData, getFailedTls } from '../../unit-test-helpers';
@@ -98,7 +98,7 @@ describe("Search filter model integration test:", () => {
                 "exchanges by body size",
                 "requests that have received a response",
                 "requests that are still waiting for a response",
-                "requests that aborted before receiving a response",
+                "requests whose connection failed before receiving a response",
                 "requests that weren't transmitted successfully",
                 "exchanges that are pinned",
                 "exchanges by their general category",
@@ -347,7 +347,7 @@ describe("Search filter model integration test:", () => {
             const matchedEvents = exampleEvents.filter(e => filter.matches(e));
             expect(matchedEvents.length).to.equal(2);
             expect((matchedEvents[0] as SuccessfulExchange).response.statusCode).to.equal(500);
-            expect((matchedEvents[1] as FailedTLSConnection).failureCause).to.equal('cert-rejected');
+            expect((matchedEvents[1] as FailedTlsConnection).failureCause).to.equal('cert-rejected');
         });
     });
 

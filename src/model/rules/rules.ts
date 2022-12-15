@@ -8,7 +8,8 @@ import {
     PASSTHROUGH_TRANSFORMS_RANGE,
     WEBSOCKET_MESSAGING_RULES_SUPPORTED,
     JSONRPC_RESPONSE_RULE_SUPPORTED,
-    RTC_RULES_SUPPORTED
+    RTC_RULES_SUPPORTED,
+    CONNECTION_RESET_SUPPORTED
 } from '../../services/service-versions';
 
 import {
@@ -16,6 +17,7 @@ import {
     ForwardToHostHandler,
     TimeoutHandler,
     CloseConnectionHandler,
+    ResetConnectionHandler,
     FromFileResponseHandler,
     TransformingHandler,
     HttpMatcherLookup,
@@ -88,7 +90,8 @@ const PartVersionRequirements: {
     'req-res-transformer': PASSTHROUGH_TRANSFORMS_RANGE,
     'ws-echo': WEBSOCKET_MESSAGING_RULES_SUPPORTED,
     'ws-listen': WEBSOCKET_MESSAGING_RULES_SUPPORTED,
-    'ws-reject': WEBSOCKET_MESSAGING_RULES_SUPPORTED
+    'ws-reject': WEBSOCKET_MESSAGING_RULES_SUPPORTED,
+    'reset-connection': CONNECTION_RESET_SUPPORTED
 };
 
 const serverSupports = (versionRequirement: string | undefined) => {
@@ -407,6 +410,7 @@ const PaidHandlerClasses: HandlerClass[] = [
     TransformingHandler,
     TimeoutHandler,
     CloseConnectionHandler,
+    ResetConnectionHandler,
     EchoWebSocketHandlerDefinition,
     RejectWebSocketHandlerDefinition,
     ListenWebSocketHandlerDefinition

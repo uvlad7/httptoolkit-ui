@@ -125,7 +125,9 @@ export function summarizeHandlerClass(key: HandlerClassKey): string {
         case 'timeout':
             return "Time out with no response";
         case 'close-connection':
-            return "Close the connection immediately";
+            return "Close the connection";
+        case 'reset-connection':
+            return "Forcibly reset the connection";
 
         case 'ws-reject':
             return "Reject the WebSocket setup request";

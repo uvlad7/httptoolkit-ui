@@ -28,6 +28,10 @@ const PlanPickerModal = styled.dialog`
 
     background-color: transparent;
     border: none;
+
+    min-width: 850px;
+    max-width: 980px;
+    width: 90%;
 `;
 
 const PlanPickerDetails = styled.section`
@@ -300,12 +304,12 @@ export class PlanPicker extends React.Component<PlanPickerProps> {
                 <PlanSmallPrint>
                     <p>
                         <strong>Cancel in two clicks, anytime</strong>. <br/>Have questions? <strong><a
-                            href="https://httptoolkit.tech/docs/guides/subscription-faq"
-                        >Read the FAQ</a></strong> or email billing@httptoolkit.tech.
+                            href="https://httptoolkit.com/docs/guides/subscription-faq"
+                        >Read the FAQ</a></strong> or email billing@httptoolkit.com.
                     </p>
                     <p>
                         By subscribing to a paid plan, you accept <Nowrap>
-                            <a href="https://httptoolkit.tech/terms-of-service">
+                            <a href="https://httptoolkit.com/terms-of-service">
                                 the HTTP Toolkit Terms of Service
                             </a>
                         </Nowrap>.
@@ -416,7 +420,7 @@ export class PlanPicker extends React.Component<PlanPickerProps> {
                         </SubFeatures>
                     </TierFeatures>
                     <PricingCTA>
-                        <ButtonLink href='https://httptoolkit.tech/contact'>
+                        <ButtonLink href='https://httptoolkit.com/contact'>
                             Get in touch
                         </ButtonLink>
                     </PricingCTA>

@@ -75,10 +75,6 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         description: ["Intercept all traffic from running Docker containers"],
         uiConfig: DockerAttachCustomUi,
         iconProps: SourceIcons.Docker,
-        checkRequirements: ({ accountStore, serverVersion }) => {
-            return accountStore.featureFlags.includes('docker') &&
-                versionSatisfies(serverVersion || '', DOCKER_INTERCEPTION_RANGE);
-        },
         tags: DOCKER_TAGS
     },
     'fresh-chrome': {
@@ -153,6 +149,18 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             return versionSatisfies(interceptorVersion, "^1.1.0")
         },
     },
+    'existing-arc': {
+        name: 'Global Arc Browser',
+        description: [
+            "Intercept Arc Browser globally on this machine",
+            "This captures all Arc traffic, so may interfere with normal usage"
+        ],
+        iconProps: SourceIcons.Arc,
+        tags: BROWSER_TAGS,
+        getActivationOptions: getChromiumOptions,
+        checkRequirements: ({ accountStore }) =>
+            accountStore.featureFlags.includes('arc-browser')
+    },
     'fresh-safari': {
         name: 'Safari',
         description: ["Intercept a fresh independent Safari window"],
@@ -210,11 +218,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
         name: 'Fresh Terminal',
         description: ["Open a new terminal that intercepts all processes & Docker containers"],
         iconProps: SourceIcons.Terminal,
-        tags: TERMINAL_TAGS,
-        getActivationOptions: ({ accountStore }) =>
-            accountStore.featureFlags.includes('docker')
-            ? { dockerEnabled: true }
-            : {}
+        tags: TERMINAL_TAGS
     },
     'existing-terminal': {
         name: 'Existing Terminal',
@@ -229,7 +233,7 @@ const INTERCEPT_OPTIONS: _.Dictionary<InterceptorConfig> = {
             'Intercept an Android device or emulator connected to ADB',
             'Automatically injects system HTTPS certificates into rooted devices & most emulators'
         ],
-        notAvailableHelpUrl: 'https://httptoolkit.tech/docs/guides/android/#android-device-via-adb-interception-option-is-not-available',
+        notAvailableHelpUrl: 'https://httptoolkit.com/docs/guides/android/#android-device-via-adb-interception-option-is-not-available',
         iconProps: androidInterceptIconProps,
         checkRequirements: ({ serverVersion }) => {
             return versionSatisfies(serverVersion || '', DETAILED_CONFIG_RANGE);

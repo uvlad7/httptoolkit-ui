@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { inject, observer } from 'mobx-react';
+import * as dateFns from 'date-fns';
 
 import { HttpExchange, HtkRequest } from '../../../types';
 import { styled } from '../../../styles';
@@ -86,8 +87,9 @@ const MatchedRulePill = styled(inject('uiStore')((p: {
         margin-right: 5px;
     }
 `;
+import { TimingEvents } from 'mockrtc';
 
-const RawRequestDetails = (p: { request: HtkRequest }) => {
+const RawRequestDetails = (p: { request: HtkRequest, timingEvents: {} | TimingEvents }) => {
     const methodDocs = getMethodDocs(p.request.method);
     const methodDetails = [
         methodDocs && <Markdown
@@ -98,8 +100,26 @@ const RawRequestDetails = (p: { request: HtkRequest }) => {
             <DocsLink href={methodDocs.url}>Find out more</DocsLink>
         </p>
     ].filter(d => !!d);
+    const startTime = 'startTime' in p.timingEvents
+    ? p.timingEvents.startTime
+    : undefined;
 
     return <div>
+        {/* <ContentLabel>Time:</ContentLabel> { startTime ? dateFns.format(startTime, 'YYYY-MM-DD HH:mm:ss.SSS Z') : 'Unknown' } */}
+        <CollapsibleSection>
+            <CollapsibleSectionSummary>
+                <ContentLabel>Time:</ContentLabel> { startTime ? dateFns.format(startTime, 'YYYY-MM-DD\u00A0\u00A0\u00A0HH:mm:ss\u2008.\u2008SSS') : 'Unknown' }
+            </CollapsibleSectionSummary>
+
+            {
+               startTime ?
+                    <CollapsibleSectionBody>
+                        <p key='method-time'>{ dateFns.format(startTime) }</p>
+                    </CollapsibleSectionBody>
+                : null
+            }
+        </CollapsibleSection>
+        
         <CollapsibleSection>
             <CollapsibleSectionSummary>
                 <ContentLabel>Method:</ContentLabel> { p.request.method }
@@ -176,7 +196,6 @@ export const HttpRequestCard = observer((props: HttpRequestCardProps) => {
                 Request
             </CollapsibleCardHeading>
         </header>
-
-        <RawRequestDetails request={request} />
+        <RawRequestDetails request={request} timingEvents={timingEvents} />
     </CollapsibleCard>;
 });

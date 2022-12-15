@@ -35,6 +35,7 @@ import { DocsLink } from '../../common/docs-link';
 import { SourceIcon } from '../../common/source-icon';
 import { HeaderDetails } from './header-details';
 import { UrlBreakdown } from '../url-breakdown';
+import { TimingEvents } from 'mockrtc';
 
 const MatchedRulePill = styled(inject('uiStore')((p: {
     className?: string,
@@ -87,7 +88,6 @@ const MatchedRulePill = styled(inject('uiStore')((p: {
         margin-right: 5px;
     }
 `;
-import { TimingEvents } from 'mockrtc';
 
 const RawRequestDetails = (p: { request: HtkRequest, timingEvents: {} | TimingEvents }) => {
     const methodDocs = getMethodDocs(p.request.method);
@@ -169,6 +169,7 @@ interface HttpRequestCardProps extends CollapsibleCardProps {
 export const HttpRequestCard = observer((props: HttpRequestCardProps) => {
     const { exchange, matchedRuleData, onRuleClicked } = props;
     const { request } = exchange;
+    const { timingEvents } = exchange;
 
     // We consider passthrough as a no-op, and so don't show anything in that case.
     const noopRule = matchedRuleData?.stepTypes.every(

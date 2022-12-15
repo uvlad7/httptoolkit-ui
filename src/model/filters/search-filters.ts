@@ -1558,6 +1558,220 @@ class ContentFilter extends Filter {
     }
 }
 
+class RequestBodyFilter extends Filter {
+
+    static filterSyntax = [
+        new FixedStringSyntax("requestBody"),
+        new StringOptionsSyntax<StringOperation>([
+            "=",
+            "!=",
+            "*=",
+            "^=",
+            "$="
+        ]),
+        new SyntaxWrapperSyntax(
+            ['[', ']'],
+            new StringSyntax("request body content", {
+                allowedChars: [[0, Infinity]] // Match all characters, all unicode included
+            }),
+            // [] should be required/suggested only if value contains a space
+            { optional: true }
+        )
+    ] as const;
+
+    static filterName = "requestBody";
+
+    static filterDescription(value: string) {
+        const [, op, bodyContent] = tryParseFilter(RequestBodyFilter, value);
+
+        if (!op) {
+            return "exchanges by request body content";
+        } else {
+            return `exchanges with a request body ${operationDescriptions[op]} ${bodyContent || 'a given value'}`;
+        }
+    }
+
+    private expectedBody: Buffer;
+
+    private op: StringOperation;
+    private predicate: (body: Buffer, expectedBody: Buffer) => boolean;
+
+    constructor(filter: string) {
+        super(filter);
+        const [, op, expectedBody] = parseFilter(RequestBodyFilter, filter);
+        this.op = op;
+
+        this.expectedBody = Buffer.from(expectedBody);
+        this.predicate = bufferOperations[this.op];
+    }
+
+    matches(event: CollectedEvent): boolean {
+        if (!(event.isHttp())) return false;
+        if (!event.isCompletedRequest()) return false; // No body yet, no match
+
+        const requestBody = event.request.body.decoded;
+
+        const matchesRequestBody = !!requestBody && requestBody.byteLength > 0 &&
+            this.predicate(requestBody, this.expectedBody);
+
+        return matchesRequestBody;
+    }
+
+    toString() {
+        return `RequestBody ${this.op} ${this.expectedBody}`;
+    }
+}
+
+class ResponseBodyFilter extends Filter {
+
+    static filterSyntax = [
+        new FixedStringSyntax("responseBody"),
+        new StringOptionsSyntax<StringOperation>([
+            "=",
+            "!=",
+            "*=",
+            "^=",
+            "$="
+        ]),
+        new SyntaxWrapperSyntax(
+            ['[', ']'],
+            new StringSyntax("response body content", {
+                allowedChars: [[0, Infinity]] // Match all characters, all unicode included
+            }),
+            // [] should be required/suggested only if value contains a space
+            { optional: true }
+        )
+    ] as const;
+
+    static filterName = "responseBody";
+
+    static filterDescription(value: string) {
+        const [, op, bodyContent] = tryParseFilter(ResponseBodyFilter, value);
+
+        if (!op) {
+            return "exchanges by response body content";
+        } else {
+            return `exchanges with a response body ${operationDescriptions[op]} ${bodyContent || 'a given value'}`;
+        }
+    }
+
+    private expectedBody: Buffer;
+
+    private op: StringOperation;
+    private predicate: (body: Buffer, expectedBody: Buffer) => boolean;
+
+    constructor(filter: string) {
+        super(filter);
+        const [, op, expectedBody] = parseFilter(ResponseBodyFilter, filter);
+        this.op = op;
+
+        this.expectedBody = Buffer.from(expectedBody);
+        this.predicate = bufferOperations[this.op];
+    }
+
+    matches(event: CollectedEvent): boolean {
+        if (!(event.isHttp())) return false;
+        if (!event.isCompletedRequest()) return false; // No body yet, no match
+
+        const responseBody = event.isSuccessfulExchange()
+            ? event.response.body.decoded
+            : undefined;
+            
+        const matchesResponseBody = !!responseBody && responseBody.byteLength > 0 &&
+            this.predicate(responseBody, this.expectedBody);
+
+        return matchesResponseBody;
+    }
+
+    toString() {
+        return `ResponseBody ${this.op} ${this.expectedBody}`;
+    }
+}
+
+class ContentFilter extends Filter {
+
+    static filterSyntax = [
+        new FixedStringSyntax("content"),
+        new StringOptionsSyntax<StringOperation>([
+            "=",
+            "!=",
+            "*=",
+            "^=",
+            "$="
+        ]),
+        new SyntaxWrapperSyntax(
+            ['[', ']'],
+            new StringSyntax("all content", {
+                allowedChars: [[0, Infinity]] // Match all characters, all unicode included
+            }),
+            // [] should be required/suggested only if value contains a space
+            { optional: true }
+        )
+    ] as const;
+
+    static filterName = "content";
+
+    static filterDescription(value: string) {
+        const [, op, strContent] = tryParseFilter(ContentFilter, value);
+
+        if (!op) {
+            return "exchanges by content";
+        } else {
+            return `exchanges with a content ${operationDescriptions[op]} ${strContent || 'a given value'}`;
+        }
+    }
+
+    private expectedBody: Buffer;
+    private expectedStr: string;
+
+
+    private op: StringOperation;
+    private strPredicate: (str: string, expectedStr: string) => boolean;
+    private bufPredicate: (body: Buffer, expectedBody: Buffer) => boolean;
+
+    constructor(filter: string) {
+        super(filter);
+        const [, op, expectedStr] = parseFilter(ContentFilter, filter);
+        this.op = op;
+
+        this.expectedBody = Buffer.from(expectedStr);
+        this.expectedStr = expectedStr;
+        this.bufPredicate = bufferOperations[this.op];
+        this.strPredicate = stringOperations[this.op];
+    }
+
+    matches(event: CollectedEvent): boolean {
+        if (!(event.isHttp())) return false;
+
+        const matchesUrl = this.strPredicate(event.request.url, this.expectedStr);
+
+        const headers = getAllHeaders(event);
+
+        const matchesHeaders = _(headers)
+            .flatMap(([key, value]) => `${key}: ${value}`)
+            .some((value) => this.strPredicate(value.toLowerCase(), this.expectedStr));
+
+        if (!event.isCompletedRequest()) return matchesUrl || matchesHeaders;
+
+        const requestBody = event.request.body.decoded;
+        const responseBody = event.isSuccessfulExchange()
+            ? event.response.body.decoded
+            : undefined;
+
+        const matchesRequestBody = !!requestBody && requestBody.byteLength > 0 &&
+            this.bufPredicate(requestBody, this.expectedBody);
+
+        const matchesResponseBody = !!responseBody && responseBody.byteLength > 0 &&
+            this.bufPredicate(responseBody, this.expectedBody);
+
+        return matchesUrl || matchesHeaders || matchesRequestBody || matchesResponseBody;
+    }
+
+    toString() {
+        return `Content ${this.op} ${this.expectedStr}`;
+    }
+}
+
 const BaseSearchFilterClasses: FilterClass[] = [
     MethodFilter,
     HostnameFilter,

@@ -1342,13 +1342,13 @@ class ContentFilter extends Filter {
     matches(event: CollectedEvent): boolean {
         if (!(event.isHttp())) return false;
 
-        const matchesUrl = this.strPredicate(event.request.url, this.expectedStr);
+        const matchesUrl = this.strPredicate(event.request.url.toLowerCase(), this.expectedStr.toLowerCase());
 
         const headers = getAllHeaders(event);
 
         const matchesHeaders = _(headers)
             .flatMap(([key, value]) => `${key}: ${value}`)
-            .some((value) => this.strPredicate(value.toLowerCase(), this.expectedStr));
+            .some((value) => this.strPredicate(value.toLowerCase(), this.expectedStr.toLowerCase()));
 
         if (!event.isCompletedRequest()) return matchesUrl || matchesHeaders;
 

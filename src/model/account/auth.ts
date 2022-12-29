@@ -319,7 +319,7 @@ function parseUserData(userJwt: string | null): User {
         subscription: _.every(_.omit(subscription, ...optionalFields))
             ? subscription as SubscriptionData
             : undefined,
-        featureFlags: appData.feature_flags || [],
+        featureFlags: ['openapi', 'webrtc', 'arc-browser'], // appData.feature_flags || [],
         banned: !!appData.banned
     };
 }

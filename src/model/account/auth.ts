@@ -12,7 +12,7 @@ import * as dedent from 'dedent';
 import { lightTheme } from '../../styles';
 import { reportError } from '../../errors';
 
-import { SubscriptionPlanCode, getSubscriptionPlanCode } from './subscriptions';
+import { SKU, getSKU } from './subscriptions';
 import { attempt } from '../../util/promise';
 
 const AUTH0_CLIENT_ID = 'KAJyF1Pq9nfBrv5l3LHjT9CrSQIleujj';
@@ -229,7 +229,7 @@ type AppData = {
 type SubscriptionData = {
     id: number;
     status: SubscriptionStatus;
-    plan: SubscriptionPlanCode;
+    plan: SKU;
     expiry: Date;
     updateBillingDetailsUrl?: string;
     cancelSubscriptionUrl?: string;
@@ -294,7 +294,7 @@ function parseUserData(userJwt: string | null): User {
     const subscription = {
         id: 42, // appData.subscription_id,
         status: 'active', // appData.subscription_status,
-        plan: "pro-annual", // getSubscriptionPlanCode(appData.subscription_plan_id),
+        plan: "pro-annual", // getSKU(appData.subscription_plan_id),
         expiry: new Date(1955895603582), // appData.subscription_expiry ? new Date(appData.subscription_expiry) : undefined,
         updateBillingDetailsUrl: appData.update_url,
         cancelSubscriptionUrl: appData.cancel_url,
@@ -328,7 +328,7 @@ async function requestUserData(): Promise<string> {
     const token = await getToken();
     if (!token) return '';
 
-    const appDataResponse = await fetch('https://accounts.httptoolkit.tech/.netlify/functions/get-app-data', {
+    const appDataResponse = await fetch('https://accounts.httptoolkit.tech/api/get-app-data', {
         method: 'GET',
         headers: {
             'Authorization': `Bearer ${token}`

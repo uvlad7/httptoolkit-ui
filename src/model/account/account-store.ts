@@ -2,7 +2,7 @@ import * as _ from 'lodash';
 import { observable, action, flow, computed, when } from 'mobx';
 
 import { reportError, reportErrorsAsUser } from '../../errors';
-import { trackEvent } from '../../tracking';
+import { trackEvent } from '../../metrics';
 import { delay } from '../../util/promise';
 import { lazyObservablePromise } from '../../util/observable';
 
@@ -18,7 +18,8 @@ import {
 import {
     SubscriptionPlans,
     SKU,
-    openCheckout
+    openCheckout,
+    getCheckoutUrl
 } from './subscriptions';
 
 export class AccountStore {
@@ -29,7 +30,17 @@ export class AccountStore {
 
     readonly initialized = lazyObservablePromise(async () => {
         // Update account data automatically on login, logout & every 10 mins
-        loginEvents.on('authenticated', async () => {
+        loginEvents.on('authenticated', async (authResult) => {
+            // If a user logs in after picking a plan, they're going to go to the
+            // checkout imminently. The API has to query Paddle to build that checkout,
+            // so we ping here early to kick that process off ASAP:
+            const initialEmailResult = authResult?.idTokenPayload?.email;
+            if (initialEmailResult && this.selectedPlan) {
+                fetch(getCheckoutUrl(initialEmailResult, this.selectedPlan), {
+                    redirect: 'manual' // We just prime the API cache, we don't navigate
+                }).catch(() => {}); // Just an optimization
+            }
+
             await this.updateUser();
             loginEvents.emit('user_data_loaded');
         });
@@ -152,7 +163,7 @@ export class AccountStore {
 
     getPro = flow(function * (this: AccountStore, source: string) {
         try {
-            trackEvent({ category: 'Account', action: 'Get Pro', label: source });
+            trackEvent({ category: 'Account', action: 'Get Pro', value: source });
 
             const selectedPlan: SKU | undefined = yield this.pickPlan();
             if (!selectedPlan) return;
@@ -165,7 +176,8 @@ export class AccountStore {
                 return;
             }
 
-            const isRiskyPayment = this.subscriptionPlans[selectedPlan].prices?.currency === 'BRL' &&
+            const planCurrency = (this.subscriptionPlans[selectedPlan].prices as any).currency;
+            const isRiskyPayment = planCurrency === 'BRL' &&
                 this.userEmail?.endsWith('@gmail.com'); // So far, all chargebacks have been from gmail accounts
 
             const newUser = !this.user.subscription; // Even cancelled users will have an expired subscription left
@@ -176,7 +188,7 @@ export class AccountStore {
                 // from using a VPN to work around it. We do still allow this for existing customers, who are already
                 // logged in - we're attempting to just block the creation of new accounts here.
 
-                trackEvent({ category: 'Account', action: 'Blocked purchase', label: selectedPlan });
+                trackEvent({ category: 'Account', action: 'Blocked purchase', value: selectedPlan });
 
                 alert(
                     "Unfortunately, due to high levels of recent chargebacks & fraud, subscriptions for new accounts "+
@@ -195,6 +207,8 @@ export class AccountStore {
                 error.message || error.code || 'Error'
             }\n\nPlease check your email for details.\nIf you need help, get in touch at billing@httptoolkit.com.`);
             this.modal = undefined;
+        } finally {
+            this.selectedPlan = undefined;
         }
     }.bind(this));
 
@@ -229,23 +243,22 @@ export class AccountStore {
     }
 
     private pickPlan = flow(function * (this: AccountStore) {
+        this.selectedPlan = undefined;
         this.modal = 'pick-a-plan';
 
         yield when(() => this.modal === undefined || !!this.selectedPlan);
 
-        const selectedPlan = this.selectedPlan;
-        this.selectedPlan = undefined;
         this.modal = undefined;
 
-        if (selectedPlan) {
-            trackEvent({ category: 'Account', action: 'Plan selected', label: selectedPlan });
+        if (this.selectedPlan) {
+            trackEvent({ category: 'Account', action: 'Plan selected', value: this.selectedPlan });
         } else if (!this.isPaidUser) {
             // If you don't pick a plan via any route other than already having
             // bought them, then you're pretty clearly rejecting them.
             trackEvent({ category: 'Account', action: 'Plans rejected' });
         }
 
-        return selectedPlan;
+        return this.selectedPlan;
     });
 
     @action.bound
@@ -279,10 +292,10 @@ export class AccountStore {
         yield this.updateUser();
         let ticksSinceCheck = 0;
         while (!this.isPaidUser && this.modal) {
-            yield delay(500);
+            yield delay(1000);
             ticksSinceCheck += 1;
 
-            if (focused || ticksSinceCheck > 20) {
+            if (focused || ticksSinceCheck > 10) {
                 // Every 10s while blurred or 500ms while focused, check the user data:
                 ticksSinceCheck = 0;
                 yield this.updateUser();
@@ -297,7 +310,7 @@ export class AccountStore {
         trackEvent({
             category: 'Account',
             action: this.isPaidUser ? 'Checkout complete' : 'Checkout cancelled',
-            label: sku
+            value: sku
         });
 
         this.modal = undefined;

@@ -2,6 +2,9 @@ import * as _ from 'lodash';
 import { reportError } from '../../errors';
 import { delay, doWhile } from '../../util/promise';
 
+export const ACCOUNTS_API = process.env.ACCOUNTS_API ??
+    `https://accounts.httptoolkit.tech/api`;
+
 export interface SubscriptionPlan {
     paddleId: number;
     name: string;
@@ -9,21 +12,24 @@ export interface SubscriptionPlan {
         currency: string;
         monthly: string;
         total: string;
-    };
+    } | 'priceless';
 }
 
 export const SubscriptionPlans = {
     'pro-monthly': { paddleId: 550380, name: 'Pro (monthly)' } as SubscriptionPlan,
     'pro-annual': { paddleId: 550382, name: 'Pro (annual)' } as SubscriptionPlan,
-    'pro-perpetual': { paddleId: 599788, name: 'Pro (perpetual)' } as SubscriptionPlan,
+    'pro-perpetual': { paddleId: 599788, name: 'Pro (perpetual)', prices: 'priceless' } as SubscriptionPlan,
     'team-monthly': { paddleId: 550789, name: 'Team (monthly)' } as SubscriptionPlan,
     'team-annual': { paddleId: 550788, name: 'Team (annual)' } as SubscriptionPlan,
 };
 
 async function loadPlanPrices() {
     const response = await fetch(
-        `https://accounts.httptoolkit.tech/api/get-prices?product_ids=${
-            Object.values(SubscriptionPlans).map(plan => plan.paddleId).join(',')
+        `${ACCOUNTS_API}/get-prices?product_ids=${
+            Object.values(SubscriptionPlans)
+            .filter(plan => !plan.prices)
+            .map(plan => plan.paddleId)
+            .join(',')
         }`
     );
 
@@ -94,13 +100,15 @@ export type SKU = keyof typeof SubscriptionPlans;
 export const getSKU = (paddleId: number | undefined) =>
     _.findKey(SubscriptionPlans, { paddleId: paddleId }) as SKU | undefined;
 
+export const getCheckoutUrl = (email: string, sku: SKU) =>
+    `${ACCOUNTS_API}/redirect-to-checkout?email=${
+        encodeURIComponent(email)
+    }&sku=${
+        sku
+    }&source=app.httptoolkit.tech&returnUrl=${
+        encodeURIComponent('https://httptoolkit.com/app-purchase-thank-you/')
+    }`;
+
 export const openCheckout = async (email: string, sku: SKU) => {
-    window.open(
-        `https://accounts.httptoolkit.tech/api/redirect-to-checkout?email=${
-            encodeURIComponent(email)
-        }&sku=${
-            sku
-        }&source=app.httptoolkit.tech`,
-        '_blank'
-    );
+    window.open(getCheckoutUrl(email, sku), '_blank');
 }

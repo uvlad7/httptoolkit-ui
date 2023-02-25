@@ -5,7 +5,7 @@ import { observer, inject } from 'mobx-react';
 
 import { styled } from '../../styles';
 import { Icon } from '../../icons';
-import { trackEvent } from '../../tracking';
+import { trackEvent } from '../../metrics';
 import { reportError } from '../../errors';
 import { Interceptor } from '../../model/interception/interceptors';
 import { InterceptorStore } from '../../model/interception/interceptor-store';
@@ -259,7 +259,7 @@ export class InterceptOption extends React.Component<InterceptOptionProps> {
         trackEvent({
             category: 'Interceptors',
             action: 'Activated',
-            label: this.props.interceptor.id
+            value: this.props.interceptor.id
         });
     };
 
@@ -274,7 +274,7 @@ export class InterceptOption extends React.Component<InterceptOptionProps> {
         trackEvent({
             category: 'Interceptors',
             action: 'Successfully Activated',
-            label: this.props.interceptor.id
+            value: this.props.interceptor.id
         });
 
         // Some interceptors don't switch to show the requests, e.g. if the UI shows a list

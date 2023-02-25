@@ -10,6 +10,7 @@ localForage.setItem('latest-auth-token', authToken);
 import { initSentry, reportError } from './errors';
 initSentry(process.env.SENTRY_DSN);
 
+import * as _ from 'lodash';
 import * as React from 'react';
 import * as ReactDOM from 'react-dom';
 import * as mobx from 'mobx';
@@ -17,10 +18,12 @@ import { Provider } from 'mobx-react';
 
 import { GlobalStyles } from './styles';
 import { delay } from './util/promise';
-import { initTracking } from './tracking';
+import { initMetrics } from './metrics';
 import { appHistory } from './routing';
 
 import registerUpdateWorker, { ServiceWorkerNoSupportError } from 'service-worker-loader!./services/update-worker';
+
+import { HttpExchange } from './types';
 
 import { UiStore } from './model/ui-store';
 import { AccountStore } from './model/account/account-store';
@@ -74,14 +77,27 @@ const accountStore = new AccountStore(
 const apiStore = new ApiStore(accountStore);
 const uiStore = new UiStore(accountStore);
 const proxyStore = new ProxyStore(accountStore);
-const eventsStore = new EventsStore(proxyStore, apiStore);
 const interceptorStore = new InterceptorStore(proxyStore, accountStore);
-const rulesStore = new RulesStore(
-    accountStore,
-    proxyStore,
-    eventsStore,
-    (exchangeId: string) => appHistory.navigate(`/view/${exchangeId}`)
+
+// Some non-trivial interactions between rules & events stores here. Rules need to use events to
+// handle breakpoints (where rule logic reads from received event data), while events need to use
+// rules to store metadata about the rule that a received event says it matched with:
+const rulesStore = new RulesStore(accountStore, proxyStore,
+    async function jumpToExchange(exchangeId: string) {
+        await eventsStore.initialized;
+
+        let exchange: HttpExchange;
+        await mobx.when(() => {
+            exchange = _.find(eventsStore.exchanges, { id: exchangeId })!;
+            // Completed -> doesn't fire for initial requests -> no completed/initial req race
+            return !!exchange && exchange.isCompletedRequest();
+        });
+
+        appHistory.navigate(`/view/${exchangeId}`);
+        return exchange!;
+    }
 );
+const eventsStore = new EventsStore(proxyStore, apiStore, rulesStore);
 
 const stores = {
     accountStore,
@@ -96,7 +112,7 @@ const stores = {
 const appStartupPromise = Promise.all(
     Object.values(stores).map(store => store.initialized)
 );
-initTracking();
+initMetrics();
 
 // Once the app is loaded, show the app
 appStartupPromise.then(() => {

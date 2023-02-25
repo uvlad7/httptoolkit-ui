@@ -5,7 +5,7 @@ import { observer, inject } from "mobx-react";
 
 import { styled } from '../../styles';
 import { WarningIcon, Icon } from '../../icons';
-import { trackEvent } from '../../tracking';
+import { trackEvent } from '../../metrics';
 
 import { uploadFile } from '../../util/ui';
 import { asError } from '../../util/error';
@@ -90,7 +90,7 @@ class UpstreamProxyConfig extends React.Component<{ rulesStore: RulesStore }> {
         const value = event.currentTarget.value;
         this.proxyType = value as UpstreamProxyType;
 
-        trackEvent({ category: "Config", action: "Set Proxy", label: this.proxyType });
+        trackEvent({ category: "Config", action: "Set Proxy", value: this.proxyType });
 
         if (value === 'direct' || value === 'system') {
             // Only update immediately when switching to a type that doesn't need a host input.

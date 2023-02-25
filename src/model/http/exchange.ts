@@ -31,11 +31,14 @@ import { parseSource } from './sources';
 import { getContentType } from '../events/content-types';
 import { HTKEventBase } from '../events/event-base';
 
+import { HandlerClassKey, HtkMockRule, getRulePartKey } from '../rules/rules';
+
 import { ApiStore } from '../api/api-store';
 import { ApiExchange } from '../api/api-interfaces';
 import { OpenApiExchange } from '../api/openapi';
 import { parseRpcApiExchange } from '../api/jsonrpc';
 import { ApiMetadata } from '../api/api-interfaces';
+
 import { decodeBody } from '../../services/ui-worker-api';
 import {
     RequestBreakpoint,
@@ -162,7 +165,7 @@ export class HttpBody implements MessageBody {
 }
 
 export type CompletedRequest = Omit<HttpExchange, 'request'> & {
-    matchedRuleId: string
+    matchedRule: { id: string, handlerRype: HandlerClassKey } | false
 };
 export type CompletedExchange = Omit<HttpExchange, 'response'> & {
     response: HtkResponse | 'aborted'
@@ -182,7 +185,6 @@ export class HttpExchange extends HTKEventBase {
         this.tags = this.request.tags;
 
         this.id = this.request.id;
-        this.matchedRuleId = this.request.matchedRuleId;
         this.searchIndex = [
             this.request.url,
             this.request.parsedUrl.protocol + '//' +
@@ -208,7 +210,8 @@ export class HttpExchange extends HTKEventBase {
     public readonly id: string;
 
     @observable
-    public matchedRuleId: string | '?' | undefined; // Undefined initially, defined for completed requests
+    // Undefined initially, defined for completed requests, false for 'not available'
+    public matchedRule: { id: string, handlerStepTypes: HandlerClassKey[] } | false | undefined;
 
     @observable
     public tags: string[];
@@ -223,7 +226,7 @@ export class HttpExchange extends HTKEventBase {
     }
 
     isCompletedRequest(): this is CompletedRequest {
-        return !!this.matchedRuleId;
+        return this.matchedRule !== undefined;
     }
 
     isCompletedExchange(): this is CompletedExchange {
@@ -252,9 +255,21 @@ export class HttpExchange extends HTKEventBase {
     @observable
     public abortMessage: string | undefined;
 
-    updateFromCompletedRequest(request: InputCompletedRequest) {
+    updateFromCompletedRequest(request: InputCompletedRequest, matchedRule: HtkMockRule | false) {
         this.request.body = new HttpBody(request, request.headers);
-        this.matchedRuleId = request.matchedRuleId || "?";
+
+        this.matchedRule = !matchedRule
+                ? false
+            : 'handler' in matchedRule
+                ? {
+                    id: matchedRule.id,
+                    handlerStepTypes: [getRulePartKey(matchedRule.handler)] as HandlerClassKey[]
+                }
+            // MatchedRule has multiple steps
+                : {
+                    id: matchedRule.id,
+                    handlerStepTypes: matchedRule.steps.map(getRulePartKey) as HandlerClassKey[]
+                };
 
         Object.assign(this.timingEvents, request.timingEvents);
         this.tags = _.union(this.tags, request.tags);

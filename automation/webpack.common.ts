@@ -153,8 +153,9 @@ export default <Webpack.Configuration>{
         }),
         new Webpack.EnvironmentPlugin({
             'SENTRY_DSN': null,
-            'GA_ID': null,
-            'UI_VERSION': null
+            'POSTHOG_KEY': null,
+            'UI_VERSION': null,
+            'ACCOUNTS_API': null,
         })
     ],
 };
